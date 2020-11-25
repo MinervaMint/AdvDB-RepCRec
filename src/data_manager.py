@@ -4,7 +4,8 @@ from .locktable import LockTable
 
 class DataManager(object):
 
-    def __init__(self):
+    def __init__(self, associated_site):
+        self.associated_site = associated_site
         self.variables = {}
         self.variable_status = {}
         self.locktable = {}

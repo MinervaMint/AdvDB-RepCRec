@@ -27,19 +27,19 @@ class IO(object):
         self.op_cnt = self.op_cnt + 1
         return op
 
-    def print_var(self, name, value):
+    def print_var(self, var_index, value):
         """ print a variable """
-        print("%s: %s" % (name, value))
+        print("x%s: %s" % (var_index, value))
 
-    def report_transaction(self, name, can_commit):
+    def report_transaction(self, transaction_index, can_commit):
         """ report status of a transaction """
-        print("Transaction %s can commit: %s" % (name, can_commit))
+        print("Transaction T%s can commit: %s" % (transaction_index, can_commit))
 
     def dump(self, site_snapshot):
         """ print a snapshot of sites """
         for site_index in site_snapshot.keys():
             print("site %d - " % site_index, end='')
-            for var_name in site_snapshot[site_index].keys():
-                print("%s: %s, " % (var_name, site_snapshot[site_index][var_name]), end='')
+            for var_index in site_snapshot[site_index].keys():
+                print("x%s: %s, " % (var_index, site_snapshot[site_index][var_index]), end='')
             print('\n')
             

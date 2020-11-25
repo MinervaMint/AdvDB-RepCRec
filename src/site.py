@@ -10,7 +10,7 @@ class Site(object):
     def __init__(self, index):
         self.index = index
         self.status = SStatus.Up
-        self.DM = None
+        self.DM = DataManager(index)
         self.last_fail_time = -1
         self.first_access_time = {}
 
@@ -19,8 +19,10 @@ class Site(object):
         self.DM.fail()
         self.last_fail_time = tick
         self.status = SStatus.Down
+        # set DM
 
     def recover(self):
         """ recover this site """
         self.DM.recover()
         self.status = SStatus.Recovering
+        # set DM

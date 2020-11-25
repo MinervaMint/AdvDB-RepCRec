@@ -8,4 +8,4 @@ class Lock(object):
 
     def __init__(self, lock_type):
         self.lock_type = lock_type
-        self.transactions = []
+        self.transactions = [] # only read lock may have multiple associated transactions
