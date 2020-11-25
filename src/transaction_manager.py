@@ -145,8 +145,11 @@ class TransactionManager(object):
     def _beginRO(self, transaction_index):
         """ start a read-only transaction """
         T = Transaction(transaction_index, True, self.global_time)
-        # TODO: take snapshot of all committed vars
+        # take snapshot of all committed vars
         T.snapshot = self._take_snapshot()
+        # TODO: what if cannot obtain snapshot?
+        # TODO: what if only part of snapshot available,
+        # but we do not need to read the unavailable ones?
         self.transactions[transaction_index] = T
 
     def _end(self, transaction_index):

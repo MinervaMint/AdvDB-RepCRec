@@ -1,8 +1,13 @@
 import os
 import logging
-from .locktable import LockTable
+from enum import Enum
+from .lock import Lock
+
+NUM_VARS = 20
 
 class DataManager(object):
+
+    VStatus = Enum("VStatus", ("Ready", "Unavailable", "Recovering"))
 
     def __init__(self, associated_site):
         self.associated_site = associated_site
@@ -10,14 +15,26 @@ class DataManager(object):
         self.variable_status = {}
         self.locktable = {}
 
-        # TODO: init variables
+        # init variables and variable status
+        for i in range(1, NUM_VARS+1):
+            if i % 2 == 0 or i % 10 + 1 == associated_site:
+                self.variables[i] = i * 10
+                self.variable_status[i] = VStatus.Ready
+
+
 
     def fail(self):
         """ when the corresponding site fails """
+        # lock information is lost
+
+        # change variable status
+
         pass
 
     def recover(self):
         """ when the corresponding site recovers """
+        # change variable status
+
         pass
 
     def get_committed_var(self, var_index):
@@ -33,6 +50,7 @@ class DataManager(object):
 
     def commit_var(self, var_index, value):
         """ when a transaction commits, commit the uncommitted variable """
+        # if the var is recovering, update status
         pass
 
     def _acquire_read_lock(self, var_index, transaction_index):

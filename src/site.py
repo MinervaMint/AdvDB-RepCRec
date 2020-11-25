@@ -19,10 +19,8 @@ class Site(object):
         self.DM.fail()
         self.last_fail_time = tick
         self.status = SStatus.Down
-        # set DM
 
     def recover(self):
         """ recover this site """
         self.DM.recover()
         self.status = SStatus.Recovering
-        # set DM
