@@ -15,7 +15,7 @@ class TransactionManager(object):
         self.transactions = {}
         self.op_retry_queue = []
         self.sites = []
-        self.wait_for_graph = {}
+        self.wait_for_graph: {int: set()} = {}
 
         # init sites
         for i in range(1, NUM_SITES+1):
@@ -118,58 +118,60 @@ class TransactionManager(object):
         """ translate an operation """
         if "begin" in op and "beginRO" not in op:
             transaction_index = op[op.find("(")+2 : op.find(")")]
-            self._begin(transaction_index)
+            return self._begin(transaction_index)
         elif "beginRO" in op:
             transaction_index = op[op.find("(")+2 : op.find(")")]
-            self._beginRO(transaction_index)
+            return self._beginRO(transaction_index)
         elif "R" in op:
             op = op.replace(" ", "")
             op = op[op.find("(")+1 : op.find(")")]
             transaction_index = int(op.split(",")[0][1:])
             var_index = int(op.split(",")[1][1:])
-            self._read(transaction_index, var_index)
+            return self._read(transaction_index, var_index)
         elif "W" in op:
             op = op.replace(" ", "")
             op = op[op.find("(")+1 : op.find(")")]
             transaction_index = int(op.split(",")[0][1:])
             var_index = int(op.split(",")[1][1:])
             value = int(op.split(",")[2])
-            self._write(transaction_index, var_index, value)
+            return self._write(transaction_index, var_index, value)
         elif "end" in op:
             transaction_index = op[op.find("(")+2 : op.find(")")]
-            self._end(transaction_index)
+            return self._end(transaction_index)
         elif "fail" in op:
             site_index = int(op[op.find("(")+1 : op.find(")")])
-            self._fail(site_index)
+            return self._fail(site_index)
         elif "recover" in op:
             site_index = int(op[op.find("(")+1 : op.find(")")])
-            self._recover(site_index)
+            return self._recover(site_index)
         elif "dump" in op:
-            self._dump()
+            return self._dump()
 
     def _begin(self, transaction_index):
         """ start a not read-only transaction """
         T = Transaction(transaction_index, False, self.global_time)
         self.transactions[transaction_index] = T
+        return True
 
     def _beginRO(self, transaction_index):
         """ start a read-only transaction """
         T = Transaction(transaction_index, True, self.global_time)
-        # take snapshot of all committed vars
-        T.snapshot = self._take_snapshot()
-        # TODO: what if cannot obtain snapshot?
-        # TODO: what if only part of snapshot available,
-        # but we do not need to read the unavailable ones?
         self.transactions[transaction_index] = T
+        return True
+
 
     def _end(self, transaction_index):
         """ end a transaction """
         T = self.transactions.get(transaction_index)
-        # TODO: if already aborted?
+        # if already aborted?
+        if T.status == Transaction.TStatus.Aborted:
+            logging.info("Transaction T%s is already aborted." % transaction_index)
+            return True
+
         if T.read_only:
             # read only transactions always commits
             T.status = Transaction.TStatus.Committed
-            self.transactions.pop(transaction_index)
+            return True
         else:
             # determine whether can commit
             # ensure that all servers you accessed have been up 
@@ -177,35 +179,34 @@ class TransactionManager(object):
             for site in self.sites:
                 if site.first_access_time.get(transaction_index) is None:
                     continue
-                if site.first_access_time[transaction_index] < site.last_fail_time or site.status == Site.SStatus.Down:
-                    self._abort_transaction(transaction_index)
-                    self.transactions.pop(transaction_index)
-                    return
-            self._commit_transaction(transaction_index)
+                if site.first_access_time[transaction_index] < site.last_fail_time:
+                    return self._abort_transaction(transaction_index)
+            return self._commit_transaction(transaction_index)
+
+
 
     def _commit_transaction(self, transaction_index):
         """ commit a transaction """
-        # write uncommitted var values to sites
         T = self.transactions.get(transaction_index)
+        # write uncommitted var values to sites
         for var_index in T.uncommitted_vars.keys():
             for site in self.sites:
                 if site.status != Site.SStatus.Down:
                     site.DM.commit_var(var_index, T.uncommitted_vars[var_index])
         # release all locks
         for site in self.sites:
-            if site.status == Site.SStatus.Down:
-                continue
-            site.DM.release_all_locks(transaction_index)
+            if site.status != Site.SStatus.Down:
+                site.DM.release_all_locks(transaction_index)
         # update the wait for graph
         for t in self.wait_for_graph.keys():
-            assert(t != transaction_index)
+            assert(t != transaction_index) # T should not be blocked if it is committing
             if transaction_index in self.wait_for_graph.get(t):
                 self.wait_for_graph.get(t).remove(transaction_index)
                 if len(self.wait_for_graph.get(t)) == 0:
                     self.wait_for_graph.pop(t)
-        # set status, remove from list
+        # set status
         T.status = Transaction.TStatus.Committed
-        self.transactions.pop(transaction_index)
+        return True
 
 
     def _abort_transaction(self, transaction_index):
@@ -213,83 +214,121 @@ class TransactionManager(object):
         T = self.transactions.get(transaction_index)
         # release all locks
         for site in self.sites:
-            if site.status == Site.SStatus.Down:
-                continue
-            site.DM.release_all_locks(transaction_index)
+            if site.status != Site.SStatus.Down:
+                site.DM.release_all_locks(transaction_index)
         # update the wait for graph
         for t in self.wait_for_graph.keys():
             if t == transaction_index:
                 self.wait_for_graph.pop(t)
-                continue
-            if transaction_index in self.wait_for_graph.get(t):
+            elif transaction_index in self.wait_for_graph.get(t):
                 self.wait_for_graph.get(t).remove(transaction_index)
                 if len(self.wait_for_graph.get(t)) == 0:
                     self.wait_for_graph.pop(t)
-        # set status, remove from list
+        # set status
         T.status = Transaction.TStatus.Aborted
-        self.transactions.pop(transaction_index)
+        return True
 
 
     def _read(self, transaction_index, var_index):
         """ read request of a transaction on a variable """
         T = self.transactions.get(transaction_index)
-        if T is None:
-            logging.info("Transaction %s is not active." % transaction_index)
-            return
+        if T is None or T.status != Transaction.TStatus.Running:
+            logging.info("Transaction T%s is not active." % transaction_index)
+            return False
+
         if T.read_only:
+            # TODO: rewrite read from snapshot
             value = T.snapshot.get(var_index)
             if value is not None:
                 IO.print_var(var_index, value)
             else:
-                return
+                return False
         else:
-            site_index = None
             if var_index % 2 == 0:
-                for i in range(1, len(self.sites)+1):
-                    if self.sites[i-1].status == Site.SStatus.Up:
-                        site_index = i - 1
-                        break
+                num_sites_down = 0
+                for site in self.sites:
+                    if site.status == Site.SStatus.Down:
+                        num_sites_down += 1
+                        continue
+                    # TODO: how to read from only one available site but update locks in all
+                    success, blocking_transactions = site.DM.read(var_index, transaction_index)
+                    if not success:
+                        self.wait_for_graph[transaction_index].update(blocking_transactions)
+                        return False
+                if num_sites_down == NUM_SITES:
+                    return False
+
+                # record first access time
+                for site in self.sites:
+                    if site.first_access_time.get(transaction_index) == None:
+                        site.first_access_time[transaction_index] = self.global_time
+                return True
+
             else:
-                site_index = var_index % 10
-            
-            if site_index == None:
-                return
-            self.sites[site_index].DM.read(var_index, transaction_index)
-            # TODO: record first access time
-                
-            
+                site = self.sites[var_index % 10]
+                if site.status == Site.SStatus.Down:
+                    return False
+                success, blocking_transactions = site.DM.read(var_index, transaction_index)
+                if not success:
+                    self.wait_for_graph[transaction_index].update(blocking_transactions)
+                    return False
 
+                if site.first_access_time.get(transaction_index) == None:
+                    site.first_access_time[transaction_index] = self.global_time
+                return True
 
+            
     def _write(self, transaction_index, var_index, value):
         """ write request of a transaction on a variable """
         T = self.transactions.get(transaction_index)
-        if T is None:
-            logging.info("Transaction %s is not active." % transaction_index)
-            return
+        if T is None or T.status != Transaction.TStatus.Running:
+            logging.info("Transaction T%s is not active." % transaction_index)
+            return False
         
-        num_sites_down = 0
-        for site in self.sites:
+        if var_index % 2 == 0:
+            num_sites_down = 0
+            for site in self.sites:
+                if site.status == Site.SStatus.Down:
+                    num_sites_down += 1
+                    continue
+                success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
+                if not success:
+                    self.wait_for_graph[transaction_index].update(blocking_transactions)
+                    return False
+
+            if num_sites_down == NUM_SITES:
+                return False
+            # if can write, save value in uncommitted vars
+            self.transactions[transaction_index].write_uncommitted(var_index, value)
+            # record first access time
+            for site in self.sites:
+                if site.first_access_time.get(transaction_index) == None:
+                    site.first_access_time[transaction_index] = self.global_time
+            return True
+        else:
+            site = self.sites[var_index % 10]
             if site.status == Site.SStatus.Down:
-                num_sites_down += 1
-                continue
-            site.DM.write(var_index, value, transaction_index)
-            # TODO: if can write, save value in uncommitted vars
+                return False
+            success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
+            if not success:
+                self.wait_for_graph[transaction_index].update(blocking_transactions)
+                return False
 
-            # TODO: record first access time
-        if num_sites_down == len(self.sites):
-            # TODO: raise error?
-            return
-
-
+            self.transactions[transaction_index].write_uncommitted(var_index, value)
+            if site.first_access_time.get(transaction_index) == None:
+                site.first_access_time[transaction_index] = self.global_time
+            return True
 
 
     def _fail(self, site_index):
         """ make a site fail """
         self.sites[site_index].fail(self.global_time)
+        return True
 
     def _recover(self, site_index):
         """ make a site recover """
         self.sites[site_index].recover()
+        return True
 
     def _dump(self):
         """ dump committed values of all copies of all variables at all sites """
@@ -299,6 +338,8 @@ class TransactionManager(object):
             snapshot[site_index+1] = site_snapshot
         return snapshot
 
+
+    # TODO: replace
     def _take_snapshot(self):
         """ take a snapshot of committed var """
         snapshot = {}

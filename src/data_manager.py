@@ -2,6 +2,7 @@ import os
 import logging
 from enum import Enum
 from .lock import Lock
+from .io import IO
 
 NUM_VARS = 20
 
@@ -28,15 +29,18 @@ class DataManager(object):
         # lock information may be lost
 
         # change variable status
-        for var in self.variable_status.keys():
-            self.variable_status[var] = VStatus.Unavailable
+        for var_index in self.variable_status.keys():
+            self.variable_status[var_index] = VStatus.Unavailable
         
 
     def recover(self):
         """ when the corresponding site recovers """
         # change variable status
-        for var in self.variable_status.keys():
-            self.variable_status[var] = VStatus.Recovering
+        for var_index in self.variable_status.keys():
+            if var_index % 2 == 0:
+                self.variable_status[var_index] = VStatus.Recovering
+            else:
+                self.variable_status[var_index] = VStatus.Ready
 
 
     def get_committed_var(self, var_index):
@@ -51,15 +55,19 @@ class DataManager(object):
         """ handles request to read a variable """
         # see if variable status ready (what if recovering?)
         if self.variable_status.get(var_index) != VStatus.Ready:
-            return None
+            return False, []
 
         # try to acquire read lock
         # if obtained lock, read
-        if self._acquire_read_lock(var_index, transaction_index):
-            return self.variables.get(var_index)
+        can_lock, blocking_transactions = self._acquire_read_lock(var_index, transaction_index)
+        if can_lock:
+            value = self.variables.get(var_index)
+            IO.print_var(var_index, value)
+            return True, []
 
         # if cannot obtain lock
-        return None
+        logging.info("Failed to acquire read lock on x%s for T%s" % var_index, transaction_index)
+        return can_lock, blocking_transactions
 
 
         
@@ -68,10 +76,8 @@ class DataManager(object):
         """ handles request to write a variable """
         assert(self.variable_status.get(var_index) != VStatus.Unavailable)
         # try to acquire write lock
-        # if obtained lock, write (write value in transaction's uncommitted vars?)
-        if self._acquire_write_lock(var_index, transaction_index):
-            return True
-        return False
+        # if obtained lock, write (write value in transaction's uncommitted vars)
+        return self._acquire_write_lock(var_index, transaction_index)
 
 
 
@@ -93,12 +99,13 @@ class DataManager(object):
             new_lock = Lock(Lock.LockType.ReadLock)
             new_lock.transactions.append(transaction_index)
             self.locktable[var_index] = new_lock
-            return True
+            return True, []
         elif current_lock.lock_type == Lock.LockType.ReadLock:
             self.locktable[var_index].transactions.append(transaction_index)
-            return True
+            return True, []
         elif current_lock.lock_type == Lock.LockType.WriteLock:
-            return False
+            blocking_transactions = current_lock.transactions
+            return False, blocking_transactions
 
 
         
@@ -111,9 +118,13 @@ class DataManager(object):
             new_lock = Lock(Lock.LockType.WriteLock)
             new_lock.transactions.append(transaction_index)
             self.locktable[var_index] = new_lock
-            return True
+            return True, []
+        elif current_lock.lock_type == Lock.LockType.ReadLock and len(current_lock.transactions) == 1 and current_lock.transactions[0] == transaction_index:
+            self.locktable[var_index].lock_type = Lock.LockType.WriteLock
+            return True, []
         else:
-            return False
+            blocking_transactions = current_lock.transactions
+            return False, blocking_transactions
 
         
 
