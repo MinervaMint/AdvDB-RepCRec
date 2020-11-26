@@ -244,7 +244,7 @@ class TransactionManager(object):
             
             if site_index == None:
                 return
-            self.sites[site_index].DM.read(var_index)
+            self.sites[site_index].DM.read(var_index, transaction_index)
             # TODO: record first access time
                 
             
@@ -262,7 +262,9 @@ class TransactionManager(object):
             if site.status == Site.SStatus.Down:
                 num_sites_down += 1
                 continue
-            site.DM.write(var_index, value)
+            site.DM.write(var_index, value, transaction_index)
+            # TODO: if can write, save value in uncommitted vars
+            
             # TODO: record first access time
         if num_sites_down == len(self.sites):
             # TODO: raise error?
