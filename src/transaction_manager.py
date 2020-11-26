@@ -22,27 +22,33 @@ class TransactionManager(object):
             self.sites.append(Site(i))
 
 
-    def tick(self, op=None):
-        self.global_time = self.global_time + 1
+    def _tick(self):
+        self.global_time += 1
 
+
+    def execute(self, op=None):
         success = True # is this op successfully executed, do we need to put it in op_retry_queue
 
-        # TODO: deadlock detection
+        # deadlock detection
         self._resolve_deadlock()
 
-        # TODO: call trnaslate to execute op if provided
+        # call translate to execute op if provided
         if op:
             success = self.transalate_op(op)
 
-        # TODO: retry
+        # retry
         for retry_op in self.op_retry_queue:
             retry_success = self.transalate_op(retry_op)
             if retry_success:
                 self.op_retry_queue.remove(retry_op)
 
-        # TODO: do we need to enqueue this op for retrying later
+        # enqueue this op for retrying later if fail
         if not success:
             self.op_retry_queue.append(op)
+
+        # TODO: when should we tick?
+        self._tick()
+
 
 
 
@@ -60,12 +66,12 @@ class TransactionManager(object):
             color[u] = -1
             cycle_exist = False
             for v in G.get(u):
-                if color[v] == 1:
+                if color[v] == 0:
                     cycle_exist = dfs(G, v, color)
                 elif color[v] == -1:
                     cycle_exist = True
                     cycle_start = v
-                    break
+                    return cycle_exist, cycle_start
             color[u] = 1
             return cycle_exist, cycle_start
 
@@ -80,17 +86,21 @@ class TransactionManager(object):
                 if cycle_exist:
                     break
         
-        if cycle_exist:
-            u = cycle_start
-            v = None
-            cycle.append(u)
+        if not cycle_exist:
+            return cycle_exist, cycle
+
+        u = cycle_start
+        cycle.append(u)
+        cycle_complete = False
+        while not cycle_complete:
             for v in self.wait_for_graph.get(u):
                 if v == cycle_start:
-                    cycle.append(v)
+                    cycle_complete = True
                     break
                 if color[v] == -1:
                     cycle.append(v)
                     u = v
+                    break
 
         return cycle_exist, cycle
 
@@ -264,7 +274,7 @@ class TransactionManager(object):
                 continue
             site.DM.write(var_index, value, transaction_index)
             # TODO: if can write, save value in uncommitted vars
-            
+
             # TODO: record first access time
         if num_sites_down == len(self.sites):
             # TODO: raise error?
