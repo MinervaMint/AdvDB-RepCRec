@@ -1,9 +1,11 @@
 import os
 import logging
 import time
-from .io import IO
-from .site import Site
-from .transaction import Transaction
+from inout import IO
+from db_site import Site
+from transaction import Transaction
+
+
 
 NUM_VARS = 20
 NUM_SITES = 10
@@ -48,6 +50,10 @@ class TransactionManager(object):
 
         # TODO: when should we tick?
         self._tick()
+
+        if op is None and len(self.op_retry_queue) == 0:
+            return False
+        return True
 
 
 
@@ -117,10 +123,10 @@ class TransactionManager(object):
     def transalate_op(self, op):
         """ translate an operation """
         if "begin" in op and "beginRO" not in op:
-            transaction_index = op[op.find("(")+2 : op.find(")")]
+            transaction_index = int(op[op.find("(")+2 : op.find(")")])
             return self._begin(transaction_index)
         elif "beginRO" in op:
-            transaction_index = op[op.find("(")+2 : op.find(")")]
+            transaction_index = int(op[op.find("(")+2 : op.find(")")])
             return self._beginRO(transaction_index)
         elif "R" in op:
             op = op.replace(" ", "")
@@ -136,7 +142,7 @@ class TransactionManager(object):
             value = int(op.split(",")[2])
             return self._write(transaction_index, var_index, value)
         elif "end" in op:
-            transaction_index = op[op.find("(")+2 : op.find(")")]
+            transaction_index = int(op[op.find("(")+2 : op.find(")")])
             return self._end(transaction_index)
         elif "fail" in op:
             site_index = int(op[op.find("(")+1 : op.find(")")])
@@ -254,6 +260,8 @@ class TransactionManager(object):
                     success, blocking_transactions = site.DM.read(var_index, transaction_index)
                     if not success:
                         self.wait_for_graph[transaction_index].update(blocking_transactions)
+                        if len(blocking_transactions) > 0:
+                            self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                         return False
                 if num_sites_down == NUM_SITES:
                     return False
@@ -271,6 +279,8 @@ class TransactionManager(object):
                 success, blocking_transactions = site.DM.read(var_index, transaction_index)
                 if not success:
                     self.wait_for_graph[transaction_index].update(blocking_transactions)
+                    if len(blocking_transactions) > 0:
+                        self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                     return False
 
                 if site.first_access_time.get(transaction_index) == None:
@@ -294,6 +304,8 @@ class TransactionManager(object):
                 success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
                 if not success:
                     self.wait_for_graph[transaction_index].update(blocking_transactions)
+                    if len(blocking_transactions) > 0:
+                        self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                     return False
 
             if num_sites_down == NUM_SITES:
@@ -312,6 +324,8 @@ class TransactionManager(object):
             success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
             if not success:
                 self.wait_for_graph[transaction_index].update(blocking_transactions)
+                if len(blocking_transactions) > 0:
+                    self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                 return False
 
             self.transactions[transaction_index].write_uncommitted(var_index, value)

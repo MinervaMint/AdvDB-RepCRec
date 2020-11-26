@@ -1,8 +1,8 @@
 import os
 import logging
 from enum import Enum
-from .lock import Lock
-from .io import IO
+from lock import Lock
+from inout import IO
 
 NUM_VARS = 20
 
@@ -20,7 +20,7 @@ class DataManager(object):
         for i in range(1, NUM_VARS+1):
             if i % 2 == 0 or i % 10 + 1 == associated_site:
                 self.variables[i] = i * 10
-                self.variable_status[i] = VStatus.Ready
+                self.variable_status[i] = self.VStatus.Ready
 
 
 
@@ -30,7 +30,7 @@ class DataManager(object):
 
         # change variable status
         for var_index in self.variable_status.keys():
-            self.variable_status[var_index] = VStatus.Unavailable
+            self.variable_status[var_index] = self.VStatus.Unavailable
         
 
     def recover(self):
@@ -38,15 +38,15 @@ class DataManager(object):
         # change variable status
         for var_index in self.variable_status.keys():
             if var_index % 2 == 0:
-                self.variable_status[var_index] = VStatus.Recovering
+                self.variable_status[var_index] = self.VStatus.Recovering
             else:
-                self.variable_status[var_index] = VStatus.Ready
+                self.variable_status[var_index] = self.VStatus.Ready
 
 
     def get_committed_var(self, var_index):
         """ get committed value of a variable """
         # if a var is ready return its value
-        if self.variable_status.get(var_index) == VStatus.Ready:
+        if self.variable_status.get(var_index) == self.VStatus.Ready:
             return self.variables.get(var_index)
         return None
 
@@ -54,7 +54,7 @@ class DataManager(object):
     def read(self, var_index, transaction_index):
         """ handles request to read a variable """
         # see if variable status ready (what if recovering?)
-        if self.variable_status.get(var_index) != VStatus.Ready:
+        if self.variable_status.get(var_index) != self.VStatus.Ready:
             return False, []
 
         # try to acquire read lock
@@ -74,7 +74,7 @@ class DataManager(object):
 
     def write(self, var_index, value, transaction_index):
         """ handles request to write a variable """
-        assert(self.variable_status.get(var_index) != VStatus.Unavailable)
+        assert(self.variable_status.get(var_index) != self.VStatus.Unavailable)
         # try to acquire write lock
         # if obtained lock, write (write value in transaction's uncommitted vars)
         return self._acquire_write_lock(var_index, transaction_index)
@@ -87,8 +87,8 @@ class DataManager(object):
         # update value in variables
         self.variables[var_index] = value
         # if the var is recovering, update status
-        if self.variable_status.get(var_index) == VStatus.Recovering:
-            self.variable_status[var_index] = VStatus.Ready
+        if self.variable_status.get(var_index) == self.VStatus.Recovering:
+            self.variable_status[var_index] = self.VStatus.Ready
         
 
     def _acquire_read_lock(self, var_index, transaction_index):
@@ -130,7 +130,7 @@ class DataManager(object):
 
     def release_all_locks(self, transaction_index):
         """ release all the locks held by a transaction """
-        for var in self.locktable.keys():
+        for var in list(self.locktable.keys()):
             lock = self.locktable.get(var)
             if lock == None:
                 continue

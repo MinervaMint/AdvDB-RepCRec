@@ -9,7 +9,7 @@ class Transaction(object):
     def __init__(self, index, read_only, start_time):
         self.index = index
         self.uncommitted_vars = {}
-        self.status = TStatus.Running
+        self.status = self.TStatus.Running
         self.read_only = read_only
         self.start_time = start_time
         self.snapshot = {}

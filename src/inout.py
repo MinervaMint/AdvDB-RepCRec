@@ -27,6 +27,7 @@ class IO(object):
         self.op_cnt = self.op_cnt + 1
         return op
 
+    @classmethod
     def print_var(self, var_index, value):
         """ print a variable """
         print("x%s: %s" % (var_index, value))

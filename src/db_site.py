@@ -1,7 +1,7 @@
 import os
 import logging
 from enum import Enum
-from .data_manager import DataManager
+from data_manager import DataManager
 
 class Site(object):
 
@@ -9,7 +9,7 @@ class Site(object):
 
     def __init__(self, index):
         self.index = index
-        self.status = SStatus.Up
+        self.status = self.SStatus.Up
         self.DM = DataManager(index)
         self.last_fail_time = -1
         self.first_access_time = {}
@@ -18,9 +18,9 @@ class Site(object):
         """ fail this site """
         self.DM.fail()
         self.last_fail_time = tick
-        self.status = SStatus.Down
+        self.status = self.SStatus.Down
 
     def recover(self):
         """ recover this site """
         self.DM.recover()
-        self.status = SStatus.Recovering
+        self.status = self.SStatus.Recovering
