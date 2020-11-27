@@ -12,14 +12,15 @@ class DataManager(object):
 
     def __init__(self, associated_site):
         self.associated_site = associated_site
-        self.variables = {}
+        self.variables: {int: [{int: int}]} = {}
         self.variable_status = {}
         self.locktable = {}
 
         # init variables and variable status
         for i in range(1, NUM_VARS+1):
             if i % 2 == 0 or i % 10 + 1 == associated_site:
-                self.variables[i] = i * 10
+                self.variables[i] = []
+                self.variables[i].append((0, i * 10))
                 self.variable_status[i] = self.VStatus.Ready
 
 
@@ -27,7 +28,7 @@ class DataManager(object):
     def fail(self):
         """ when the corresponding site fails """
         # lock information may be lost
-
+        self.locktable = {}
         # change variable status
         for var_index in self.variable_status.keys():
             self.variable_status[var_index] = self.VStatus.Unavailable
@@ -44,10 +45,11 @@ class DataManager(object):
 
 
     def get_committed_var(self, var_index):
-        """ get committed value of a variable """
+        """ get latest committed value of a variable """
         # if a var is ready return its value
         if self.variable_status.get(var_index) == self.VStatus.Ready:
-            return self.variables.get(var_index)
+            num_versions = len(self.variables.get(var_index))
+            return self.variables.get(var_index)[num_versions - 1][1]
         return None
 
 
@@ -61,7 +63,7 @@ class DataManager(object):
         # if obtained lock, read
         can_lock, blocking_transactions = self._acquire_read_lock(var_index, transaction_index)
         if can_lock:
-            value = self.variables.get(var_index)
+            value = self.get_committed_var(var_index)
             IO.print_var(var_index, value)
             return True, []
 
@@ -82,10 +84,10 @@ class DataManager(object):
 
 
 
-    def commit_var(self, var_index, value):
-        """ when a transaction commits, commit the uncommitted variable """
+    def commit_var(self, var_index, value, tick):
+        """ when a transaction commits, commit the uncommitted variable, record it as a new version """
         # update value in variables
-        self.variables[var_index] = value
+        self.variables[var_index].append((tick, value))
         # if the var is recovering, update status
         if self.variable_status.get(var_index) == self.VStatus.Recovering:
             self.variable_status[var_index] = self.VStatus.Ready
@@ -142,5 +144,24 @@ class DataManager(object):
 
 
     def dump(self):
-        """ dump everything on this site """
-        return self.variables
+        """ dump current variables on this site """
+        snapshot = {}
+        for var_index in self.variables.keys():
+            num_versions = len(self.variables.get(var_index))
+            snapshot[var_index] = self.variables.get(var_index)[num_versions - 1][1]
+        return snapshot
+
+
+    def read_from_snapshot(self, var_index, start_time):
+        """ multiversion read for RO transactions """
+        success = False
+        var_versions = self.variables.get(var_index)
+        num_versions = len(var_versions)
+        for version in range(num_versions-1, -1, -1):
+            tick = var_versions[version][0]
+            if tick <= start_time:
+                success = True
+                value = var_versions[version][1]
+                IO.print_var(var_index, value)
+                break
+        return success

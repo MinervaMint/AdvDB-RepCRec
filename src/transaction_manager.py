@@ -198,7 +198,7 @@ class TransactionManager(object):
         for var_index in T.uncommitted_vars.keys():
             for site in self.sites:
                 if site.status != Site.SStatus.Down:
-                    site.DM.commit_var(var_index, T.uncommitted_vars[var_index])
+                    site.DM.commit_var(var_index, T.uncommitted_vars[var_index], self.global_time)
         # release all locks
         for site in self.sites:
             if site.status != Site.SStatus.Down:
@@ -243,12 +243,7 @@ class TransactionManager(object):
             return False
 
         if T.read_only:
-            # TODO: rewrite read from snapshot
-            value = T.snapshot.get(var_index)
-            if value is not None:
-                IO.print_var(var_index, value)
-            else:
-                return False
+            return self._read_from_snapshot(var_index, T.start_time)
         else:
             if var_index % 2 == 0:
                 num_sites_down = 0
@@ -258,11 +253,12 @@ class TransactionManager(object):
                         continue
                     # TODO: how to read from only one available site but update locks in all
                     success, blocking_transactions = site.DM.read(var_index, transaction_index)
-                    if not success:
+                    if not success and len(blocking_transactions) > 0: # waiting for lock
                         self.wait_for_graph[transaction_index].update(blocking_transactions)
-                        if len(blocking_transactions) > 0:
-                            self.transactions[transaction_index].status = Transaction.TStatus.Blocked
+                        self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                         return False
+                    elif not success and len(blocking_transactions) == 0: # variable not ready
+                        num_sites_down += 1
                 if num_sites_down == NUM_SITES:
                     return False
 
@@ -353,20 +349,20 @@ class TransactionManager(object):
         return snapshot
 
 
-    # TODO: replace
-    def _take_snapshot(self):
-        """ take a snapshot of committed var """
-        snapshot = {}
-        for i in range(1, NUM_VARS+1):
-            if i % 2 == 0: # even indexed var at all sites
-                for site in self.sites:
-                    if site.status == Site.SStatus.Up:
-                        snapshot[i] = site.DM.get_committed_var(i)
+    def _read_from_snapshot(self, var_index, start_time):
+        """ read for RO transactions """
+        success = False
+        if var_index % 2 == 0:
+            for site in self.sites:
+                if site.status != Site.SStatus.Down:
+                    success = site.DM.read_from_snapshot(var_index, start_time)
+                    if success:
                         break
-            else: # odd indexed var at one site
-                site = self.sites[i % 10]
-                snapshot[i] = site.DM.get_committed_var(i)
-            # TODO: if no committed value?
-            if snapshot[i] == None:
-                return None
-        return snapshot
+        else:
+            site = self.sites[var_index % 10]
+            if site.status != Site.SStatus.Down:
+                success = site.DM.read_from_snapshot(var_index, start_time)
+        return success
+
+
+
