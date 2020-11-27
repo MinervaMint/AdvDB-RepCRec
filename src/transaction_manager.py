@@ -251,54 +251,37 @@ class TransactionManager(object):
     def _read(self, transaction_index, var_index):
         """ read request of a transaction on a variable """
         T = self.transactions.get(transaction_index)
-        if T is None or T.status != Transaction.TStatus.Running:
+        if T is None or T.status == Transaction.TStatus.Aborted or T.status == Transaction.TStatus.Committed:
             logging.info("Transaction T%s is not active." % transaction_index)
             return False
 
         if T.read_only:
             return self._read_from_snapshot(var_index, T.start_time)
         else:
-            if var_index % 2 == 0:
-                num_sites_down = 0
-                for site in self.sites:
-                    if site.status == Site.SStatus.Down:
-                        num_sites_down += 1
-                        continue
-                    # TODO: how to read from only one available site but update locks in all
-                    success, blocking_transactions = site.DM.read(var_index, transaction_index)
-                    if not success and len(blocking_transactions) > 0: # waiting for lock
-                        if self.wait_for_graph.get(transaction_index) is None:
-                            self.wait_for_graph[transaction_index] = set()
-                        self.wait_for_graph[transaction_index].update(blocking_transactions)
-                        self.transactions[transaction_index].status = Transaction.TStatus.Blocked
-                        return False
-                    elif not success and len(blocking_transactions) == 0: # variable not ready
-                        num_sites_down += 1
-                if num_sites_down == NUM_SITES:
-                    return False
-
-                # record first access time
-                for site in self.sites:
-                    if site.first_access_time.get(transaction_index) == None:
-                        site.first_access_time[transaction_index] = self.global_time
-                return True
-
-            else:
-                site = self.sites[var_index % 10]
+            relevent_sites = self._get_relevent_sites(var_index)
+            num_sites_unavailable = 0
+            for site in relevent_sites:
                 if site.status == Site.SStatus.Down:
-                    return False
+                    num_sites_unavailable += 1
+                    continue
                 success, blocking_transactions = site.DM.read(var_index, transaction_index)
-                if not success:
+                if not success and len(blocking_transactions) > 0: # waiting for lock
                     if self.wait_for_graph.get(transaction_index) is None:
                         self.wait_for_graph[transaction_index] = set()
                     self.wait_for_graph[transaction_index].update(blocking_transactions)
-                    if len(blocking_transactions) > 0:
-                        self.transactions[transaction_index].status = Transaction.TStatus.Blocked
+                    self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                     return False
+                elif not success and len(blocking_transactions) == 0: # variable not ready
+                    num_sites_unavailable += 1
+            if num_sites_unavailable == len(relevent_sites): # no sites available for read
+                return False
 
+            # record first access time
+            for site in relevent_sites:
                 if site.first_access_time.get(transaction_index) == None:
                     site.first_access_time[transaction_index] = self.global_time
-                return True
+            return True
+
 
             
     def _write(self, transaction_index, var_index, value):
@@ -307,48 +290,30 @@ class TransactionManager(object):
         if T is None or T.status == Transaction.TStatus.Aborted or T.status == Transaction.TStatus.Committed:
             logging.info("Transaction T%s is not active." % transaction_index)
             return False
-        
-        if var_index % 2 == 0:
-            num_sites_down = 0
-            for site in self.sites:
-                if site.status == Site.SStatus.Down:
-                    num_sites_down += 1
-                    continue
-                success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
-                if not success:
-                    if self.wait_for_graph.get(transaction_index) is None:
-                        self.wait_for_graph[transaction_index] = set()
-                    self.wait_for_graph[transaction_index].update(blocking_transactions)
-                    if len(blocking_transactions) > 0:
-                        self.transactions[transaction_index].status = Transaction.TStatus.Blocked
-                    return False
 
-            if num_sites_down == NUM_SITES:
-                return False
-            # if can write, save value in uncommitted vars
-            self.transactions[transaction_index].write_uncommitted(var_index, value)
-            # record first access time
-            for site in self.sites:
-                if site.first_access_time.get(transaction_index) == None:
-                    site.first_access_time[transaction_index] = self.global_time
-            return True
-        else:
-            site = self.sites[var_index % 10]
+        relevent_sites = self._get_relevent_sites(var_index)
+        num_sites_unavailable = 0
+        for site in relevent_sites:
             if site.status == Site.SStatus.Down:
-                return False
+                num_sites_unavailable += 1
+                continue
             success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
             if not success:
                 if self.wait_for_graph.get(transaction_index) is None:
                     self.wait_for_graph[transaction_index] = set()
                 self.wait_for_graph[transaction_index].update(blocking_transactions)
-                if len(blocking_transactions) > 0:
-                    self.transactions[transaction_index].status = Transaction.TStatus.Blocked
+                self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                 return False
-
-            self.transactions[transaction_index].write_uncommitted(var_index, value)
+        
+        if num_sites_unavailable == len(relevent_sites):
+            return False
+        # if can write, save value in uncommitted vars
+        self.transactions[transaction_index].write_uncommitted(var_index, value)
+        # record first access time
+        for site in relevent_sites:
             if site.first_access_time.get(transaction_index) == None:
                 site.first_access_time[transaction_index] = self.global_time
-            return True
+        return True
 
 
     def _fail(self, site_index):
@@ -367,7 +332,8 @@ class TransactionManager(object):
         for site_index, site in enumerate(self.sites):
             site_snapshot = site.DM.dump()
             snapshot[site_index+1] = site_snapshot
-        return snapshot
+        IO.dump(snapshot)
+        return True
 
 
     def _read_from_snapshot(self, var_index, start_time):
