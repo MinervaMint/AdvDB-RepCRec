@@ -1,4 +1,0 @@
-2020-11-27 04:24:42,041 - inout.py[line:16] - INFO: Opened input file src/test.txt.
-2020-11-27 04:24:42,041 - inout.py[line:21] - INFO: Read in 12 operations.
-2020-11-27 04:24:42,042 - inout.py[line:11] - INFO: IO module initialized.
-2020-11-27 04:24:42,042 - transaction_manager.py[line:31] - INFO: TM initialized.
