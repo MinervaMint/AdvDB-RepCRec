@@ -21,7 +21,7 @@ class TransactionManager(object):
     def __init__(self):
         self.global_time = 0
         self.transactions = {}
-        self.op_retry_queue = []
+        self.op_retry_queue = {}
         self.sites = []
         self.wait_for_graph: {int: set()} = {}
 
@@ -41,19 +41,26 @@ class TransactionManager(object):
         # deadlock detection
         self._resolve_deadlock()
 
+        # retry
+        for retry_op in list(self.op_retry_queue.keys()):
+            retry_success, transaction_index = self.transalate_op(retry_op)
+            if retry_success:
+                self.op_retry_queue.pop(retry_op)
+
+
         # call translate to execute op if provided
         if op:
-            success = self.transalate_op(op)
+            success, op_transaction_index = self.transalate_op(op)
 
         # retry
-        for retry_op in self.op_retry_queue:
-            retry_success = self.transalate_op(retry_op)
+        for retry_op in list(self.op_retry_queue.keys()):
+            retry_success, transaction_index = self.transalate_op(retry_op)
             if retry_success:
-                self.op_retry_queue.remove(retry_op)
+                self.op_retry_queue.pop(retry_op)
 
         # enqueue this op for retrying later if fail
         if not success:
-            self.op_retry_queue.append(op)
+            self.op_retry_queue[op] = op_transaction_index
 
         self._tick()
 
@@ -126,7 +133,7 @@ class TransactionManager(object):
         """ abort the yougest transaction """
         youngest_index = cycle[0]
         for transaction_index in cycle:
-            if self.transactions[transaction_index].start_time < self.transactions[youngest_index].start_time:
+            if self.transactions[transaction_index].start_time > self.transactions[youngest_index].start_time:
                 youngest_index = transaction_index
         
         self._abort_transaction(youngest_index)
@@ -136,34 +143,34 @@ class TransactionManager(object):
         """ translate an operation """
         if "begin" in op and "beginRO" not in op:
             transaction_index = int(op[op.find("(")+2 : op.find(")")])
-            return self._begin(transaction_index)
+            return self._begin(transaction_index), transaction_index
         elif "beginRO" in op:
             transaction_index = int(op[op.find("(")+2 : op.find(")")])
-            return self._beginRO(transaction_index)
+            return self._beginRO(transaction_index), transaction_index
         elif "R" in op:
             op = op.replace(" ", "")
             op = op[op.find("(")+1 : op.find(")")]
             transaction_index = int(op.split(",")[0][1:])
             var_index = int(op.split(",")[1][1:])
-            return self._read(transaction_index, var_index)
+            return self._read(transaction_index, var_index), transaction_index
         elif "W" in op:
             op = op.replace(" ", "")
             op = op[op.find("(")+1 : op.find(")")]
             transaction_index = int(op.split(",")[0][1:])
             var_index = int(op.split(",")[1][1:])
             value = int(op.split(",")[2])
-            return self._write(transaction_index, var_index, value)
+            return self._write(transaction_index, var_index, value), transaction_index
         elif "end" in op:
             transaction_index = int(op[op.find("(")+2 : op.find(")")])
-            return self._end(transaction_index)
+            return self._end(transaction_index), transaction_index
         elif "fail" in op:
             site_index = int(op[op.find("(")+1 : op.find(")")])
-            return self._fail(site_index)
+            return self._fail(site_index), None
         elif "recover" in op:
             site_index = int(op[op.find("(")+1 : op.find(")")])
-            return self._recover(site_index)
+            return self._recover(site_index), None
         elif "dump" in op:
-            return self._dump()
+            return self._dump(), None
 
     def _begin(self, transaction_index):
         """ start a not read-only transaction """
@@ -236,13 +243,17 @@ class TransactionManager(object):
             if site.status != Site.SStatus.Down:
                 site.DM.release_all_locks(transaction_index)
         # update the wait for graph
-        for t in self.wait_for_graph.keys():
+        for t in list(self.wait_for_graph.keys()):
             if t == transaction_index:
                 self.wait_for_graph.pop(t)
             elif transaction_index in self.wait_for_graph.get(t):
                 self.wait_for_graph.get(t).remove(transaction_index)
                 if len(self.wait_for_graph.get(t)) == 0:
                     self.wait_for_graph.pop(t)
+        # TODO: when aborting a transaction, all associated op in retry queue should be removed
+        for retry_op in list(self.op_retry_queue.keys()):
+            if self.op_retry_queue[retry_op] == transaction_index:
+                self.op_retry_queue.pop(retry_op)
         # set status
         T.status = Transaction.TStatus.Aborted
         return True
@@ -318,12 +329,12 @@ class TransactionManager(object):
 
     def _fail(self, site_index):
         """ make a site fail """
-        self.sites[site_index].fail(self.global_time)
+        self.sites[site_index - 1].fail(self.global_time)
         return True
 
     def _recover(self, site_index):
         """ make a site recover """
-        self.sites[site_index].recover()
+        self.sites[site_index - 1].recover()
         return True
 
     def _dump(self):

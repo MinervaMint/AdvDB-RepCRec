@@ -12,7 +12,6 @@ class Transaction(object):
         self.status = self.TStatus.Running
         self.read_only = read_only
         self.start_time = start_time
-        self.snapshot = {}
 
     def write_uncommitted(self, var_index, value):
         """ store write value in transaction """

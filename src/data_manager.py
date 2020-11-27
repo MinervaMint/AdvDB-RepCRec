@@ -68,7 +68,7 @@ class DataManager(object):
             return True, []
 
         # if cannot obtain lock
-        logging.info("Failed to acquire read lock on x%s for T%s" % var_index, transaction_index)
+        logging.info("Failed to acquire read lock on x%s for T%s" % (var_index, transaction_index))
         return can_lock, blocking_transactions
 
 
@@ -103,9 +103,12 @@ class DataManager(object):
             self.locktable[var_index] = new_lock
             return True, []
         elif current_lock.lock_type == Lock.LockType.ReadLock:
-            self.locktable[var_index].transactions.append(transaction_index)
+            if transaction_index not in current_lock.transactions:
+                self.locktable[var_index].transactions.append(transaction_index)
             return True, []
         elif current_lock.lock_type == Lock.LockType.WriteLock:
+            if current_lock.transactions[0] == transaction_index:
+                return True, []
             blocking_transactions = current_lock.transactions
             return False, blocking_transactions
 
@@ -123,6 +126,8 @@ class DataManager(object):
             return True, []
         elif current_lock.lock_type == Lock.LockType.ReadLock and len(current_lock.transactions) == 1 and current_lock.transactions[0] == transaction_index:
             self.locktable[var_index].lock_type = Lock.LockType.WriteLock
+            return True, []
+        elif current_lock.lock_type == Lock.LockType.WriteLock and current_lock.transactions[0] == transaction_index:
             return True, []
         else:
             blocking_transactions = current_lock.transactions
