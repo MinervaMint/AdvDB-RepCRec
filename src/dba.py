@@ -3,8 +3,8 @@ from transaction_manager import TransactionManager
 import sys
 
 
-# filename = "src/test.txt"
-filename = "test.txt"
+filename = "src/test.txt"
+# filename = "test.txt"
 
 io = IO(filename)
 tm = TransactionManager()

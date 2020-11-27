@@ -6,6 +6,12 @@ from db_site import Site
 from transaction import Transaction
 
 
+logging.basicConfig(level=logging.INFO,
+                    filename='log.log',
+                    filemode='w',
+                    format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
+
+
 
 NUM_VARS = 20
 NUM_SITES = 10
@@ -22,6 +28,7 @@ class TransactionManager(object):
         # init sites
         for i in range(1, NUM_SITES+1):
             self.sites.append(Site(i))
+        logging.info("TM initialized.")
 
 
     def _tick(self):
@@ -29,8 +36,8 @@ class TransactionManager(object):
 
 
     def execute(self, op=None):
-        success = True # is this op successfully executed, do we need to put it in op_retry_queue
-
+        success = True
+        
         # deadlock detection
         self._resolve_deadlock()
 
@@ -48,13 +55,17 @@ class TransactionManager(object):
         if not success:
             self.op_retry_queue.append(op)
 
-        # TODO: when should we tick?
         self._tick()
 
         if op is None and len(self.op_retry_queue) == 0:
             return False
         return True
 
+    def _get_relevent_sites(self, var_index):
+        if var_index % 2 == 0:
+            return self.sites
+        else:
+            return [self.sites[var_index % 10]]
 
 
 
@@ -71,13 +82,14 @@ class TransactionManager(object):
             cycle_start = None
             color[u] = -1
             cycle_exist = False
-            for v in G.get(u):
-                if color[v] == 0:
-                    cycle_exist = dfs(G, v, color)
-                elif color[v] == -1:
-                    cycle_exist = True
-                    cycle_start = v
-                    return cycle_exist, cycle_start
+            if G.get(u) is not None:
+                for v in G.get(u):
+                    if color[v] == 0:
+                        cycle_exist,cycle_start = dfs(G, v, color)
+                    elif color[v] == -1:
+                        cycle_exist = True
+                        cycle_start = v
+                        return cycle_exist, cycle_start
             color[u] = 1
             return cycle_exist, cycle_start
 
@@ -85,7 +97,7 @@ class TransactionManager(object):
         cycle_exist = False
         cycle_start = None
 
-        color = [0] * len(self.transactions)
+        color = [0] * (len(self.transactions)+1)
         for u in self.wait_for_graph.keys():
             if color[u] == 0:
                 cycle_exist, cycle_start = dfs(self.wait_for_graph, u, color)
@@ -195,8 +207,9 @@ class TransactionManager(object):
         """ commit a transaction """
         T = self.transactions.get(transaction_index)
         # write uncommitted var values to sites
+        # TODO: fix bug: which sites to commit to
         for var_index in T.uncommitted_vars.keys():
-            for site in self.sites:
+            for site in self._get_relevent_sites(var_index):
                 if site.status != Site.SStatus.Down:
                     site.DM.commit_var(var_index, T.uncommitted_vars[var_index], self.global_time)
         # release all locks
@@ -204,7 +217,7 @@ class TransactionManager(object):
             if site.status != Site.SStatus.Down:
                 site.DM.release_all_locks(transaction_index)
         # update the wait for graph
-        for t in self.wait_for_graph.keys():
+        for t in list(self.wait_for_graph.keys()):
             assert(t != transaction_index) # T should not be blocked if it is committing
             if transaction_index in self.wait_for_graph.get(t):
                 self.wait_for_graph.get(t).remove(transaction_index)
@@ -254,6 +267,8 @@ class TransactionManager(object):
                     # TODO: how to read from only one available site but update locks in all
                     success, blocking_transactions = site.DM.read(var_index, transaction_index)
                     if not success and len(blocking_transactions) > 0: # waiting for lock
+                        if self.wait_for_graph.get(transaction_index) is None:
+                            self.wait_for_graph[transaction_index] = set()
                         self.wait_for_graph[transaction_index].update(blocking_transactions)
                         self.transactions[transaction_index].status = Transaction.TStatus.Blocked
                         return False
@@ -274,6 +289,8 @@ class TransactionManager(object):
                     return False
                 success, blocking_transactions = site.DM.read(var_index, transaction_index)
                 if not success:
+                    if self.wait_for_graph.get(transaction_index) is None:
+                        self.wait_for_graph[transaction_index] = set()
                     self.wait_for_graph[transaction_index].update(blocking_transactions)
                     if len(blocking_transactions) > 0:
                         self.transactions[transaction_index].status = Transaction.TStatus.Blocked
@@ -287,7 +304,7 @@ class TransactionManager(object):
     def _write(self, transaction_index, var_index, value):
         """ write request of a transaction on a variable """
         T = self.transactions.get(transaction_index)
-        if T is None or T.status != Transaction.TStatus.Running:
+        if T is None or T.status == Transaction.TStatus.Aborted or T.status == Transaction.TStatus.Committed:
             logging.info("Transaction T%s is not active." % transaction_index)
             return False
         
@@ -299,6 +316,8 @@ class TransactionManager(object):
                     continue
                 success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
                 if not success:
+                    if self.wait_for_graph.get(transaction_index) is None:
+                        self.wait_for_graph[transaction_index] = set()
                     self.wait_for_graph[transaction_index].update(blocking_transactions)
                     if len(blocking_transactions) > 0:
                         self.transactions[transaction_index].status = Transaction.TStatus.Blocked
@@ -319,6 +338,8 @@ class TransactionManager(object):
                 return False
             success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
             if not success:
+                if self.wait_for_graph.get(transaction_index) is None:
+                    self.wait_for_graph[transaction_index] = set()
                 self.wait_for_graph[transaction_index].update(blocking_transactions)
                 if len(blocking_transactions) > 0:
                     self.transactions[transaction_index].status = Transaction.TStatus.Blocked

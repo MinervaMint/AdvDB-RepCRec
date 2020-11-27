@@ -8,6 +8,8 @@ class IO(object):
         self.operations = []
         self._read_in_ops()
 
+        logging.info("IO module initialized.")
+
     def _read_in_ops(self):
         """ read in operations from input source """
         with open(self.filename, 'r') as file:
