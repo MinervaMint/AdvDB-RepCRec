@@ -12,7 +12,7 @@ class DataManager(object):
 
     def __init__(self, associated_site):
         self.associated_site = associated_site
-        self.variables: {int: [{int: int}]} = {}
+        self.variables: {int: [()]} = {}
         self.variable_status = {}
         self.locktable = {}
 
@@ -157,7 +157,7 @@ class DataManager(object):
         return snapshot
 
 
-    def read_from_snapshot(self, var_index, start_time):
+    def read_from_snapshot(self, var_index, start_time, first_fail_time, last_fail_time):
         """ multiversion read for RO transactions """
         success = False
         var_versions = self.variables.get(var_index)
@@ -165,8 +165,9 @@ class DataManager(object):
         for version in range(num_versions-1, -1, -1):
             tick = var_versions[version][0]
             if tick <= start_time:
-                success = True
-                value = var_versions[version][1]
-                IO.print_var(var_index, value)
+                if first_fail_time is None or (first_fail_time > start_time) or last_fail_time < tick:
+                    success = True
+                    value = var_versions[version][1]
+                    IO.print_var(var_index, value)
                 break
         return success

@@ -23,6 +23,7 @@ class TransactionManager(object):
         self.transactions = {}
         self.op_retry_queue = {}
         self.sites = []
+        self.sites_fail_time: {int:[]} = {}
         self.wait_for_graph: {int: set()} = {}
 
         # init sites
@@ -43,6 +44,7 @@ class TransactionManager(object):
 
         # retry
         for retry_op in list(self.op_retry_queue.keys()):
+            # TODO: use wait for graph to determine whether we need to retry (if still blocked no need to retry)
             retry_success, transaction_index = self.transalate_op(retry_op)
             if retry_success:
                 self.op_retry_queue.pop(retry_op)
@@ -59,7 +61,7 @@ class TransactionManager(object):
                 self.op_retry_queue.pop(retry_op)
 
         # enqueue this op for retrying later if fail
-        if not success:
+        if not success and self.transactions[op_transaction_index].status != Transaction.TStatus.Aborted:
             self.op_retry_queue[op] = op_transaction_index
 
         self._tick()
@@ -194,7 +196,6 @@ class TransactionManager(object):
             return True
 
         if T.read_only:
-            # read only transactions always commits
             T.status = Transaction.TStatus.Committed
             return True
         else:
@@ -204,7 +205,11 @@ class TransactionManager(object):
             for site in self.sites:
                 if site.first_access_time.get(transaction_index) is None:
                     continue
-                if site.first_access_time[transaction_index] < site.last_fail_time:
+                last_fail_time = -1
+                if self.sites_fail_time.get(site.index) is not None:
+                    last_fail_index = len(self.sites_fail_time.get(site.index)) - 1
+                    last_fail_time = self.sites_fail_time.get(site.index)[last_fail_index]
+                if site.first_access_time[transaction_index] < last_fail_time:
                     return self._abort_transaction(transaction_index)
             return self._commit_transaction(transaction_index)
 
@@ -267,7 +272,7 @@ class TransactionManager(object):
             return False
 
         if T.read_only:
-            return self._read_from_snapshot(var_index, T.start_time)
+            return self._read_from_snapshot(transaction_index, var_index, T.start_time)
         else:
             relevent_sites = self._get_relevent_sites(var_index)
             num_sites_unavailable = 0
@@ -330,6 +335,9 @@ class TransactionManager(object):
     def _fail(self, site_index):
         """ make a site fail """
         self.sites[site_index - 1].fail(self.global_time)
+        if self.sites_fail_time.get(site_index) is None:
+            self.sites_fail_time[site_index] = []
+        self.sites_fail_time[site_index].append(self.global_time)
         return True
 
     def _recover(self, site_index):
@@ -347,20 +355,30 @@ class TransactionManager(object):
         return True
 
 
-    def _read_from_snapshot(self, var_index, start_time):
+    def _read_from_snapshot(self, transaction_index, var_index, start_time):
         """ read for RO transactions """
         success = False
-        if var_index % 2 == 0:
-            for site in self.sites:
-                if site.status != Site.SStatus.Down:
-                    success = site.DM.read_from_snapshot(var_index, start_time)
-                    if success:
-                        break
-        else:
+
+        if var_index % 2 != 0:
+            # odd indexed (no duplicates)
             site = self.sites[var_index % 10]
             if site.status != Site.SStatus.Down:
-                success = site.DM.read_from_snapshot(var_index, start_time)
+                success = site.DM.read_from_snapshot(var_index, start_time, None, None)
+        else:
+            # even indexed (duplicates)
+            relevent_sites = self._get_relevent_sites(var_index)
+            for site in relevent_sites:
+                last_fail_time = None
+                first_fail_time = None
+                if self.sites_fail_time.get(site.index) is not None:
+                    last_fail_index = len(self.sites_fail_time.get(site.index)) - 1
+                    last_fail_time = self.sites_fail_time.get(site.index)[last_fail_index]
+                    first_fail_time = self.sites_fail_time.get(site.index)[0]
+                success = site.DM.read_from_snapshot(var_index, start_time, first_fail_time, last_fail_time)
+                if success:
+                    break
+        if not success:
+            self._abort_transaction(transaction_index)
         return success
-
 
 
