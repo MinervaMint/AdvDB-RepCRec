@@ -119,7 +119,7 @@ class DataManager(object):
         """ acquire write lock """
         # check lock table
         current_lock = self.locktable.get(var_index)
-        if current_lock == None:
+        if current_lock is None:
             new_lock = Lock(Lock.LockType.WriteLock)
             new_lock.transactions.append(transaction_index)
             self.locktable[var_index] = new_lock
@@ -132,6 +132,19 @@ class DataManager(object):
         else:
             blocking_transactions = current_lock.transactions
             return False, blocking_transactions
+
+
+    def try_write_lock(self, var_index, transaction_index):
+        """ return whether a transaction can acquire write lock on a var (do not actually lock) """
+        current_lock = self.locktable.get(var_index)
+        if current_lock is None:
+            return True, []
+        if current_lock.lock_type == Lock.LockType.ReadLock and len(current_lock.transactions) == 1 and current_lock.transactions[0] == transaction_index:
+            return True, []
+        if current_lock.lock_type == Lock.LockType.WriteLock and current_lock.transactions[0] == transaction_index:
+            return True, []
+        blocking_transactions = current_lock.transactions
+        return False, blocking_transactions
 
         
 
