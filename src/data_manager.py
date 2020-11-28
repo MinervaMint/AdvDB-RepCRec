@@ -12,7 +12,7 @@ class DataManager(object):
 
     def __init__(self, associated_site):
         self.associated_site = associated_site
-        self.variables: {int: [{int: int}]} = {}
+        self.variables: {int: [()]} = {}
         self.variable_status = {}
         self.locktable = {}
 
@@ -32,6 +32,7 @@ class DataManager(object):
         # change variable status
         for var_index in self.variable_status.keys():
             self.variable_status[var_index] = self.VStatus.Unavailable
+        logging.info("Site %s fails." % (self.associated_site))
         
 
     def recover(self):
@@ -42,6 +43,7 @@ class DataManager(object):
                 self.variable_status[var_index] = self.VStatus.Recovering
             else:
                 self.variable_status[var_index] = self.VStatus.Ready
+        logging.info("Site %s recovers." % (self.associated_site))
 
 
     def get_committed_var(self, var_index):
@@ -61,14 +63,15 @@ class DataManager(object):
 
         # try to acquire read lock
         # if obtained lock, read
-        can_lock, blocking_transactions = self._acquire_read_lock(var_index, transaction_index)
+        can_lock, blocking_transactions = self.acquire_read_lock(var_index, transaction_index)
         if can_lock:
             value = self.get_committed_var(var_index)
+            logging.info("Read x%s = %s from site %s by T%s." % (var_index, value, self.associated_site, transaction_index))
             IO.print_var(var_index, value)
             return True, []
 
         # if cannot obtain lock
-        logging.info("Failed to acquire read lock on x%s for T%s" % (var_index, transaction_index))
+        logging.info("Cannot acquire read lock on x%s for T%s." % (var_index, transaction_index))
         return can_lock, blocking_transactions
 
 
@@ -79,7 +82,7 @@ class DataManager(object):
         assert(self.variable_status.get(var_index) != self.VStatus.Unavailable)
         # try to acquire write lock
         # if obtained lock, write (write value in transaction's uncommitted vars)
-        return self._acquire_write_lock(var_index, transaction_index)
+        return self.acquire_write_lock(var_index, transaction_index)
 
 
 
@@ -88,12 +91,13 @@ class DataManager(object):
         """ when a transaction commits, commit the uncommitted variable, record it as a new version """
         # update value in variables
         self.variables[var_index].append((tick, value))
+        logging.info("Commit x%s = %s to site %s at tick: %s." % (var_index, value, self.associated_site, tick))
         # if the var is recovering, update status
         if self.variable_status.get(var_index) == self.VStatus.Recovering:
             self.variable_status[var_index] = self.VStatus.Ready
         
 
-    def _acquire_read_lock(self, var_index, transaction_index):
+    def acquire_read_lock(self, var_index, transaction_index):
         """ acquire read lock """
         # check lock table
         current_lock = self.locktable.get(var_index)
@@ -115,11 +119,11 @@ class DataManager(object):
 
         
 
-    def _acquire_write_lock(self, var_index, transaction_index):
+    def acquire_write_lock(self, var_index, transaction_index):
         """ acquire write lock """
         # check lock table
         current_lock = self.locktable.get(var_index)
-        if current_lock == None:
+        if current_lock is None:
             new_lock = Lock(Lock.LockType.WriteLock)
             new_lock.transactions.append(transaction_index)
             self.locktable[var_index] = new_lock
@@ -133,18 +137,39 @@ class DataManager(object):
             blocking_transactions = current_lock.transactions
             return False, blocking_transactions
 
+
+    def try_write_lock(self, var_index, transaction_index):
+        """ return whether a transaction can acquire write lock on a var (do not actually lock) """
+        current_lock = self.locktable.get(var_index)
+        if current_lock is None:
+            return True, []
+        if current_lock.lock_type == Lock.LockType.ReadLock and len(current_lock.transactions) == 1 and current_lock.transactions[0] == transaction_index:
+            return True, []
+        if current_lock.lock_type == Lock.LockType.WriteLock and current_lock.transactions[0] == transaction_index:
+            return True, []
+        blocking_transactions = current_lock.transactions
+        logging.info("Cannot acquire write lock on x%s for T%s." % (var_index, transaction_index))
+        logging.debug("Blocked by transaction(s): ")
+        logging.debug(blocking_transactions)
+        return False, blocking_transactions
+
         
 
     def release_all_locks(self, transaction_index):
         """ release all the locks held by a transaction """
         for var in list(self.locktable.keys()):
             lock = self.locktable.get(var)
-            if lock == None:
+            if lock is None:
                 continue
             if transaction_index in lock.transactions:
                 self.locktable[var].transactions.remove(transaction_index)
                 if len(self.locktable[var].transactions) == 0:
                     self.locktable.pop(var)
+              
+
+    def get_lock_on_var(self, var_index):
+        """ return the current lock on a var """
+        return self.locktable.get(var_index)
 
 
 
@@ -157,7 +182,7 @@ class DataManager(object):
         return snapshot
 
 
-    def read_from_snapshot(self, var_index, start_time):
+    def read_from_snapshot(self, var_index, start_time, first_fail_time, last_fail_time, transaction_index):
         """ multiversion read for RO transactions """
         success = False
         var_versions = self.variables.get(var_index)
@@ -165,8 +190,10 @@ class DataManager(object):
         for version in range(num_versions-1, -1, -1):
             tick = var_versions[version][0]
             if tick <= start_time:
-                success = True
-                value = var_versions[version][1]
-                IO.print_var(var_index, value)
+                if first_fail_time is None or (first_fail_time > start_time) or last_fail_time < tick:
+                    success = True
+                    value = var_versions[version][1]
+                    IO.print_var(var_index, value)
+                    logging.info("Read x%s = %s from site %s by T%s." % (var_index, value, self.associated_site, transaction_index))
                 break
         return success

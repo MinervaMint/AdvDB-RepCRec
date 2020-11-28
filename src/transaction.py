@@ -16,3 +16,4 @@ class Transaction(object):
     def write_uncommitted(self, var_index, value):
         """ store write value in transaction """
         self.uncommitted_vars[var_index] = value
+        logging.info("Write x%s = %s to uncommitted variables in T%s." % (var_index, value, self.index))
