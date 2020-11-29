@@ -72,7 +72,7 @@ class DataManager(object):
             return True, []
 
         # if cannot obtain lock
-        logging.info("Cannot acquire read lock on x%s for T%s." % (var_index, transaction_index))
+        logging.info("Cannot acquire read lock on x%s for T%s at site %d." % (var_index, transaction_index, self.associated_site))
         return can_lock, blocking_transactions
 
 
@@ -85,7 +85,7 @@ class DataManager(object):
         # if obtained lock, write (write value in transaction's uncommitted vars)
         success, blocking_transactions = self.acquire_write_lock(var_index, transaction_index)
         if success:
-            logging.info("T%s acquired write lock on x%s." % (transaction_index, var_index))
+            logging.info("T%s acquired write lock on x%s at site %d." % (transaction_index, var_index, self.associated_site))
         return success, blocking_transactions
 
 
