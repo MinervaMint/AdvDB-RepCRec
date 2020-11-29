@@ -94,24 +94,30 @@ class TransactionManager(object):
     def _detect_cycle(self):
         """ determine whether there exists cycles in the wait for graph """
 
+        cycle = []
+        cycle_exist = False
+        self.cycle_complete = False
+
         def dfs(G, u, color):
-            cycle_start = None
             color[u] = -1
+            cycle_start = None
             cycle_exist = False
             if G.get(u) is not None:
                 for v in G.get(u):
                     if color[v] == 0:
-                        cycle_exist,cycle_start = dfs(G, v, color)
+                        cycle_exist, cycle_start = dfs(G, v, color)
                     elif color[v] == -1:
                         cycle_exist = True
                         cycle_start = v
+                        self.cycle_complete = False
+                        cycle.append(u)
                         return cycle_exist, cycle_start
             color[u] = 1
+            if cycle_exist and not self.cycle_complete:
+                cycle.append(u)
+                self.cycle_complete = (cycle_start == u)
             return cycle_exist, cycle_start
 
-        cycle = []
-        cycle_exist = False
-        cycle_start = None
 
         color = [0] * (len(self.transactions)+1)
         for u in self.wait_for_graph.keys():
@@ -120,22 +126,6 @@ class TransactionManager(object):
                 if cycle_exist:
                     break
         
-        if not cycle_exist:
-            return cycle_exist, cycle
-
-        u = cycle_start
-        cycle.append(u)
-        cycle_complete = False
-        while not cycle_complete:
-            for v in self.wait_for_graph.get(u):
-                if v == cycle_start:
-                    cycle_complete = True
-                    break
-                if color[v] == -1:
-                    cycle.append(v)
-                    u = v
-                    break
-
         return cycle_exist, cycle
 
     def _abort_youngest(self, cycle):
@@ -256,6 +246,7 @@ class TransactionManager(object):
                         for site in self._get_relevent_sites(var_index):
                             success, blocking_transactions = site.DM.acquire_read_lock(var_index, head_transaction)
                             if success:
+                                logging.info("Let the first in lock waiting queue (T%s) get read lock on x%s." % (head_lock_type, var_index))
                                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
                                 if len(self.lock_waiting_queue[var_index]) != 0:
                                     head_transaction = self.lock_waiting_queue[var_index][0][0]
@@ -272,7 +263,8 @@ class TransactionManager(object):
                             current_locked = True
                             break
                 if not current_locked:
-                    site.DM.acquire_write_lock(var_index, head_transaction)
+                    for site in self._get_relevent_sites(var_index):
+                        site.DM.acquire_write_lock(var_index, head_transaction)
                     self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
 
 
@@ -332,7 +324,8 @@ class TransactionManager(object):
                             current_locked = True
                             break
                 if not current_locked:
-                    site.DM.acquire_write_lock(var_index, head_transaction)
+                    for site in self._get_relevent_sites(var_index):
+                        site.DM.acquire_write_lock(var_index, head_transaction)
                     self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
 
 
