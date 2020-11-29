@@ -246,20 +246,37 @@ class TransactionManager(object):
             head_lock_type = waiting_queue[0][1]
             
             if head_lock_type == Lock.LockType.ReadLock:
-                keep_iterating = True
-                while head_lock_type == Lock.LockType.ReadLock and keep_iterating:
-                    for site in self._get_relevent_sites(var_index):
-                        if site.status != Site.SStatus.Down and site.DM.variable_status[var_index] == DataManager.VStatus.Ready:
-                            current_lock = site.DM.get_lock_on_var(var_index)
-                            if current_lock is None:
-                                site.DM.acquire_read_lock(var_index, head_transaction)
+                current_locked = True
+                for site in self._get_relevent_sites(var_index):
+                    if site.status != Site.SStatus.Down and site.DM.get_lock_on_var(var_index) is None:
+                        current_locked = False
+                        break
+                if not current_locked:
+                    while head_lock_type == Lock.LockType.ReadLock:
+                        for site in self._get_relevent_sites(var_index):
+                            success, blocking_transactions = site.DM.acquire_read_lock(var_index, head_transaction)
+                            if success:
                                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
-                                if len(self.lock_waiting_queue[var_index]) == 0:
-                                    keep_iterating = False
-                                    break
-                                head_transaction = waiting_queue[0][0]
-                                head_lock_type = waiting_queue[0][1]
+                                if len(self.lock_waiting_queue[var_index]) != 0:
+                                    head_transaction = self.lock_waiting_queue[var_index][0][0]
+                                    head_lock_type = self.lock_waiting_queue[var_index][0][1]
                                 break
+                        if len(self.lock_waiting_queue[var_index]) == 0:
+                            break
+                # keep_iterating = True
+                # while head_lock_type == Lock.LockType.ReadLock and keep_iterating:
+                #     for site in self._get_relevent_sites(var_index):
+                #         if site.status != Site.SStatus.Down and site.DM.variable_status[var_index] == DataManager.VStatus.Ready:
+                #             current_lock = site.DM.get_lock_on_var(var_index)
+                #             if current_lock is None:
+                #                 site.DM.acquire_read_lock(var_index, head_transaction)
+                #                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
+                #                 if len(self.lock_waiting_queue[var_index]) == 0:
+                #                     keep_iterating = False
+                #                     break
+                #                 head_transaction = waiting_queue[0][0]
+                #                 head_lock_type = waiting_queue[0][1]
+                #                 break
             else:
                 current_locked = False
                 for site in self._get_relevent_sites(var_index):
@@ -302,20 +319,39 @@ class TransactionManager(object):
             head_lock_type = waiting_queue[0][1]
             
             if head_lock_type == Lock.LockType.ReadLock:
-                keep_iterating = True
-                while head_lock_type == Lock.LockType.ReadLock and keep_iterating:
-                    for site in self._get_relevent_sites(var_index):
-                        if site.status != Site.SStatus.Down and site.DM.variable_status[var_index] == DataManager.VStatus.Ready:
-                            current_lock = site.DM.get_lock_on_var(var_index)
-                            if current_lock is None:
-                                site.DM.acquire_read_lock(var_index, head_transaction)
+                current_locked = True
+                for site in self._get_relevent_sites(var_index):
+                    if site.status != Site.SStatus.Down and site.DM.get_lock_on_var(var_index) is None:
+                        current_locked = False
+                        break
+                if not current_locked:
+                    while head_lock_type == Lock.LockType.ReadLock:
+                        for site in self._get_relevent_sites(var_index):
+                            success, blocking_transactions = site.DM.acquire_read_lock(var_index, head_transaction)
+                            if success:
                                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
-                                if len(self.lock_waiting_queue[var_index]) == 0:
-                                    keep_iterating = False
-                                    break
-                                head_transaction = waiting_queue[0][0]
-                                head_lock_type = waiting_queue[0][1]
+                                if len(self.lock_waiting_queue[var_index]) != 0:
+                                    head_transaction = self.lock_waiting_queue[var_index][0][0]
+                                    head_lock_type = self.lock_waiting_queue[var_index][0][1]
                                 break
+                        if len(self.lock_waiting_queue[var_index]) == 0:
+                            break
+
+
+                # keep_iterating = True
+                # while head_lock_type == Lock.LockType.ReadLock and keep_iterating:
+                #     for site in self._get_relevent_sites(var_index):
+                #         if site.status != Site.SStatus.Down and site.DM.variable_status[var_index] == DataManager.VStatus.Ready:
+                #             current_lock = site.DM.get_lock_on_var(var_index)
+                #             if current_lock is None:
+                #                 site.DM.acquire_read_lock(var_index, head_transaction)
+                #                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
+                #                 if len(self.lock_waiting_queue[var_index]) == 0:
+                #                     keep_iterating = False
+                #                     break
+                #                 head_transaction = waiting_queue[0][0]
+                #                 head_lock_type = waiting_queue[0][1]
+                #                 break
             else:
                 current_locked = False
                 for site in self._get_relevent_sites(var_index):
@@ -372,6 +408,7 @@ class TransactionManager(object):
                         existing_transactions.append(wait[0])
                     if transaction_index in existing_transactions:
                         return False
+
                     last_in_queue = self.lock_waiting_queue[var_index][len(self.lock_waiting_queue[var_index]) - 1]
                     if last_in_queue[1] == Lock.LockType.WriteLock:
                         if self.wait_for_graph.get(transaction_index) is None:
@@ -382,6 +419,9 @@ class TransactionManager(object):
                         if self.wait_for_graph.get(transaction_index) is None:
                             self.wait_for_graph[transaction_index] = set()
                         self.wait_for_graph[transaction_index] = set(last_in_queue_wait)
+
+                    # update lock waiting queue
+                    self.lock_waiting_queue[var_index].append((transaction_index, Lock.LockType.ReadLock))
                     return False
 
 
@@ -466,6 +506,9 @@ class TransactionManager(object):
                     if self.wait_for_graph.get(transaction_index) is None:
                         self.wait_for_graph[transaction_index] = set()
                     self.wait_for_graph[transaction_index].update(preceding_read_transactions)
+
+                # update lock waiting queue
+                self.lock_waiting_queue[var_index].append((transaction_index, Lock.LockType.ReadLock))
                 return False
 
         
