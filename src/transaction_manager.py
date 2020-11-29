@@ -554,8 +554,7 @@ class TransactionManager(object):
         if var_index % 2 != 0:
             # odd indexed (no duplicates)
             site = self.sites[var_index % 10]
-            if site.status != Site.SStatus.Down:
-                success = site.DM.read_from_snapshot(var_index, start_time, None, None, transaction_index)
+            success = site.DM.read_from_snapshot(var_index, start_time, None, None, transaction_index)
         else:
             # even indexed (duplicates)
             relevent_sites = self._get_relevent_sites(var_index)
