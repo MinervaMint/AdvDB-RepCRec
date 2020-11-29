@@ -463,7 +463,7 @@ class TransactionManager(object):
                     existing_transactions.append(wait[0])
                 if transaction_index in existing_transactions:
                     return False
-                    
+
                 # update wait for graph
                 len_waiting_queue = len(self.lock_waiting_queue[var_index])
                 last_in_queue = self.lock_waiting_queue[var_index][len_waiting_queue - 1]
@@ -484,7 +484,7 @@ class TransactionManager(object):
                     self.wait_for_graph[transaction_index].update(preceding_read_transactions)
 
                 # update lock waiting queue
-                self.lock_waiting_queue[var_index].append((transaction_index, Lock.LockType.ReadLock))
+                self.lock_waiting_queue[var_index].append((transaction_index, Lock.LockType.WriteLock))
                 logging.info("Other ops waiting for lock on x%s. T%s has to wait for write lock in the queue." % (var_index, transaction_index))
                 return False
 
