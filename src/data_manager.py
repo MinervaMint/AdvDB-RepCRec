@@ -170,6 +170,8 @@ class DataManager(object):
                 continue
             if transaction_index in lock.transactions:
                 self.locktable[var].transactions.remove(transaction_index)
+                lock_type = "read" if lock.lock_type == Lock.LockType.ReadLock else "write"
+                logging.info("Released T%s's %s lock on x%s on site %s." % (transaction_index, lock_type, var, self.associated_site))
                 if len(self.locktable[var].transactions) == 0:
                     self.locktable.pop(var)
               
