@@ -3,8 +3,12 @@ from transaction_manager import TransactionManager
 import sys
 
 
-filename = "src/test.txt"
-# filename = "test.txt"
+
+if len(sys.argv) < 2:
+    print("Usage: python3 dba.py <inputfile>")
+    sys.exit()
+
+filename = sys.argv[1]
 
 io = IO(filename)
 tm = TransactionManager()

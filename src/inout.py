@@ -35,11 +35,6 @@ class IO(object):
         print("x%s: %s" % (var_index, value))
 
     @classmethod
-    def report_transaction(cls, transaction_index, can_commit):
-        """ report status of a transaction """
-        print("Transaction T%s can commit: %s" % (transaction_index, can_commit))
-
-    @classmethod
     def dump(cls, site_snapshot):
         """ print a snapshot of sites """
         for site_index in site_snapshot.keys():

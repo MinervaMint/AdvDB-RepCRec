@@ -51,19 +51,18 @@ class TransactionManager(object):
 
         # retry
         for retry_op in list(self.op_retry_queue.keys()):
-            # TODO: use wait for graph to determine whether we need to retry (if still blocked no need to retry)
-            retry_success, transaction_index = self.transalate_op(retry_op)
+            retry_success, transaction_index = self._translate_op(retry_op)
             if retry_success:
                 self.op_retry_queue.pop(retry_op)
 
 
         # call translate to execute op if provided
         if op:
-            success, op_transaction_index = self.transalate_op(op)
+            success, op_transaction_index = self._translate_op(op)
 
         # retry
         for retry_op in list(self.op_retry_queue.keys()):
-            retry_success, transaction_index = self.transalate_op(retry_op)
+            retry_success, transaction_index = self._translate_op(retry_op)
             if retry_success:
                 self.op_retry_queue.pop(retry_op)
 
@@ -94,24 +93,30 @@ class TransactionManager(object):
     def _detect_cycle(self):
         """ determine whether there exists cycles in the wait for graph """
 
+        cycle = []
+        cycle_exist = False
+        self.cycle_complete = False
+
         def dfs(G, u, color):
-            cycle_start = None
             color[u] = -1
+            cycle_start = None
             cycle_exist = False
             if G.get(u) is not None:
                 for v in G.get(u):
                     if color[v] == 0:
-                        cycle_exist,cycle_start = dfs(G, v, color)
+                        cycle_exist, cycle_start = dfs(G, v, color)
                     elif color[v] == -1:
                         cycle_exist = True
                         cycle_start = v
+                        self.cycle_complete = False
+                        cycle.append(u)
                         return cycle_exist, cycle_start
             color[u] = 1
+            if cycle_exist and not self.cycle_complete:
+                cycle.append(u)
+                self.cycle_complete = (cycle_start == u)
             return cycle_exist, cycle_start
 
-        cycle = []
-        cycle_exist = False
-        cycle_start = None
 
         color = [0] * (len(self.transactions)+1)
         for u in self.wait_for_graph.keys():
@@ -120,22 +125,6 @@ class TransactionManager(object):
                 if cycle_exist:
                     break
         
-        if not cycle_exist:
-            return cycle_exist, cycle
-
-        u = cycle_start
-        cycle.append(u)
-        cycle_complete = False
-        while not cycle_complete:
-            for v in self.wait_for_graph.get(u):
-                if v == cycle_start:
-                    cycle_complete = True
-                    break
-                if color[v] == -1:
-                    cycle.append(v)
-                    u = v
-                    break
-
         return cycle_exist, cycle
 
     def _abort_youngest(self, cycle):
@@ -145,10 +134,12 @@ class TransactionManager(object):
             if self.transactions[transaction_index].start_time > self.transactions[youngest_index].start_time:
                 youngest_index = transaction_index
         
+        logging.info("Aborting T%s to break the deadlock." % transaction_index)
+        print("Aborting T%s to break the deadlock." % transaction_index)
         self._abort_transaction(youngest_index)
 
     
-    def transalate_op(self, op):
+    def _translate_op(self, op):
         """ translate an operation """
         if "begin" in op and "beginRO" not in op:
             transaction_index = int(op[op.find("(")+2 : op.find(")")])
@@ -205,9 +196,10 @@ class TransactionManager(object):
             return True
 
         if T.read_only:
-            T.status = Transaction.TStatus.Committed
-            logging.info("T%s commits." % transaction_index)
-            return True
+            if T.status == Transaction.TStatus.Aborted:
+                logging.info("T%s already aborted." % transaction_index)
+                return True
+            return self._commit_transaction(transaction_index)
         else:
             # determine whether can commit
             # ensure that all servers you accessed have been up 
@@ -220,6 +212,8 @@ class TransactionManager(object):
                     last_fail_index = len(self.sites_fail_time.get(site.index)) - 1
                     last_fail_time = self.sites_fail_time.get(site.index)[last_fail_index]
                 if site.first_access_time[transaction_index] < last_fail_time:
+                    logging.info("Aborting T%s because some servers it accessed failed after its first access." % transaction_index)
+                    print("Aborting T%s because some servers it accessed failed after its first access." % transaction_index)
                     return self._abort_transaction(transaction_index)
             return self._commit_transaction(transaction_index)
 
@@ -246,20 +240,25 @@ class TransactionManager(object):
             head_lock_type = waiting_queue[0][1]
             
             if head_lock_type == Lock.LockType.ReadLock:
-                keep_iterating = True
-                while head_lock_type == Lock.LockType.ReadLock and keep_iterating:
-                    for site in self._get_relevent_sites(var_index):
-                        if site.status != Site.SStatus.Down and site.DM.variable_status[var_index] == DataManager.VStatus.Ready:
-                            current_lock = site.DM.get_lock_on_var(var_index)
-                            if current_lock is None:
-                                site.DM.acquire_read_lock(var_index, head_transaction)
+                current_locked = True
+                for site in self._get_relevent_sites(var_index):
+                    if site.status != Site.SStatus.Down and site.DM.get_lock_on_var(var_index) is None:
+                        current_locked = False
+                        break
+                if not current_locked:
+                    while head_lock_type == Lock.LockType.ReadLock:
+                        for site in self._get_relevent_sites(var_index):
+                            success, blocking_transactions = site.DM.acquire_read_lock(var_index, head_transaction)
+                            if success:
+                                logging.info("Let the first in lock waiting queue (T%s) get read lock on x%s." % (head_lock_type, var_index))
                                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
-                                if len(self.lock_waiting_queue[var_index]) == 0:
-                                    keep_iterating = False
-                                    break
-                                head_transaction = waiting_queue[0][0]
-                                head_lock_type = waiting_queue[0][1]
+                                if len(self.lock_waiting_queue[var_index]) != 0:
+                                    head_transaction = self.lock_waiting_queue[var_index][0][0]
+                                    head_lock_type = self.lock_waiting_queue[var_index][0][1]
                                 break
+                        if len(self.lock_waiting_queue[var_index]) == 0:
+                            break
+                        
             else:
                 current_locked = False
                 for site in self._get_relevent_sites(var_index):
@@ -268,7 +267,8 @@ class TransactionManager(object):
                             current_locked = True
                             break
                 if not current_locked:
-                    site.DM.acquire_write_lock(var_index, head_transaction)
+                    for site in self._get_relevent_sites(var_index):
+                        site.DM.acquire_write_lock(var_index, head_transaction)
                     self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
 
 
@@ -282,6 +282,7 @@ class TransactionManager(object):
         # set status
         T.status = Transaction.TStatus.Committed
         logging.info("T%s commits at tick: %s." % (transaction_index, self.global_time))
+        print("T%s commits." % transaction_index)
         return True
 
 
@@ -302,20 +303,24 @@ class TransactionManager(object):
             head_lock_type = waiting_queue[0][1]
             
             if head_lock_type == Lock.LockType.ReadLock:
-                keep_iterating = True
-                while head_lock_type == Lock.LockType.ReadLock and keep_iterating:
-                    for site in self._get_relevent_sites(var_index):
-                        if site.status != Site.SStatus.Down and site.DM.variable_status[var_index] == DataManager.VStatus.Ready:
-                            current_lock = site.DM.get_lock_on_var(var_index)
-                            if current_lock is None:
-                                site.DM.acquire_read_lock(var_index, head_transaction)
+                current_locked = True
+                for site in self._get_relevent_sites(var_index):
+                    if site.status != Site.SStatus.Down and site.DM.get_lock_on_var(var_index) is None:
+                        current_locked = False
+                        break
+                if not current_locked:
+                    while head_lock_type == Lock.LockType.ReadLock:
+                        for site in self._get_relevent_sites(var_index):
+                            success, blocking_transactions = site.DM.acquire_read_lock(var_index, head_transaction)
+                            if success:
                                 self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
-                                if len(self.lock_waiting_queue[var_index]) == 0:
-                                    keep_iterating = False
-                                    break
-                                head_transaction = waiting_queue[0][0]
-                                head_lock_type = waiting_queue[0][1]
+                                if len(self.lock_waiting_queue[var_index]) != 0:
+                                    head_transaction = self.lock_waiting_queue[var_index][0][0]
+                                    head_lock_type = self.lock_waiting_queue[var_index][0][1]
                                 break
+                        if len(self.lock_waiting_queue[var_index]) == 0:
+                            break
+
             else:
                 current_locked = False
                 for site in self._get_relevent_sites(var_index):
@@ -324,7 +329,8 @@ class TransactionManager(object):
                             current_locked = True
                             break
                 if not current_locked:
-                    site.DM.acquire_write_lock(var_index, head_transaction)
+                    for site in self._get_relevent_sites(var_index):
+                        site.DM.acquire_write_lock(var_index, head_transaction)
                     self.lock_waiting_queue[var_index].remove((head_transaction, head_lock_type))
 
 
@@ -336,13 +342,14 @@ class TransactionManager(object):
                 self.wait_for_graph.get(t).remove(transaction_index)
                 if len(self.wait_for_graph.get(t)) == 0:
                     self.wait_for_graph.pop(t)
-        # TODO: when aborting a transaction, all associated op in retry queue should be removed
+        # when aborting a transaction, all associated op in retry queue should be removed
         for retry_op in list(self.op_retry_queue.keys()):
             if self.op_retry_queue[retry_op] == transaction_index:
                 self.op_retry_queue.pop(retry_op)
         # set status
         T.status = Transaction.TStatus.Aborted
         logging.info("T%s aborts at tick: %s." % (transaction_index, self.global_time))
+        print("T%s aborts." % transaction_index)
         return True
 
 
@@ -366,12 +373,14 @@ class TransactionManager(object):
                         acquired_lock = True
                         break
                 if not acquired_lock:
-                    # update wait for graph
+                    # check whether this transaction is in the lock waiting queue
                     existing_transactions = []
                     for wait in self.lock_waiting_queue[var_index]:
                         existing_transactions.append(wait[0])
                     if transaction_index in existing_transactions:
                         return False
+
+                    # update wait for graph
                     last_in_queue = self.lock_waiting_queue[var_index][len(self.lock_waiting_queue[var_index]) - 1]
                     if last_in_queue[1] == Lock.LockType.WriteLock:
                         if self.wait_for_graph.get(transaction_index) is None:
@@ -382,6 +391,10 @@ class TransactionManager(object):
                         if self.wait_for_graph.get(transaction_index) is None:
                             self.wait_for_graph[transaction_index] = set()
                         self.wait_for_graph[transaction_index] = set(last_in_queue_wait)
+
+                    # update lock waiting queue
+                    self.lock_waiting_queue[var_index].append((transaction_index, Lock.LockType.ReadLock))
+                    logging.info("Other ops waiting for lock on x%s. T%s has to wait for read lock in the queue." % (var_index, transaction_index))
                     return False
 
 
@@ -443,12 +456,14 @@ class TransactionManager(object):
                     acquired_lock = True
                     break
             if not acquired_lock:
-                # update wait for graph
+                # check whether this transaction is in the lock waiting queue
                 existing_transactions = []
                 for wait in self.lock_waiting_queue[var_index]:
                     existing_transactions.append(wait[0])
                 if transaction_index in existing_transactions:
                     return False
+
+                # update wait for graph
                 len_waiting_queue = len(self.lock_waiting_queue[var_index])
                 last_in_queue = self.lock_waiting_queue[var_index][len_waiting_queue - 1]
                 if last_in_queue[1] == Lock.LockType.WriteLock:
@@ -466,6 +481,10 @@ class TransactionManager(object):
                     if self.wait_for_graph.get(transaction_index) is None:
                         self.wait_for_graph[transaction_index] = set()
                     self.wait_for_graph[transaction_index].update(preceding_read_transactions)
+
+                # update lock waiting queue
+                self.lock_waiting_queue[var_index].append((transaction_index, Lock.LockType.WriteLock))
+                logging.info("Other ops waiting for lock on x%s. T%s has to wait for write lock in the queue." % (var_index, transaction_index))
                 return False
 
         
@@ -500,14 +519,14 @@ class TransactionManager(object):
             if site.status == Site.SStatus.Down:
                 continue
             success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
+            # record first access time
+            if site.first_access_time.get(transaction_index) == None:
+                site.first_access_time[transaction_index] = self.global_time
             
         
         # if can write, save value in uncommitted vars
         self.transactions[transaction_index].write_uncommitted(var_index, value)
-        # record first access time
-        for site in relevent_sites:
-            if site.first_access_time.get(transaction_index) == None:
-                site.first_access_time[transaction_index] = self.global_time
+
         return True
 
 
@@ -537,16 +556,23 @@ class TransactionManager(object):
     def _read_from_snapshot(self, transaction_index, var_index, start_time):
         """ read for RO transactions """
         success = False
+        retry = False
 
         if var_index % 2 != 0:
             # odd indexed (no duplicates)
             site = self.sites[var_index % 10]
             if site.status != Site.SStatus.Down:
                 success = site.DM.read_from_snapshot(var_index, start_time, None, None, transaction_index)
+            else:
+                retry = True
         else:
             # even indexed (duplicates)
             relevent_sites = self._get_relevent_sites(var_index)
+            num_sites_down = 0
             for site in relevent_sites:
+                if site.status == Site.SStatus.Down:
+                    num_sites_down += 1
+                    continue
                 last_fail_time = None
                 first_fail_time = None
                 if self.sites_fail_time.get(site.index) is not None:
@@ -556,8 +582,11 @@ class TransactionManager(object):
                 success = site.DM.read_from_snapshot(var_index, start_time, first_fail_time, last_fail_time, transaction_index)
                 if success:
                     break
-        if not success:
-            logging.info("T%s aborts." % transaction_index)
+            if num_sites_down == len(relevent_sites):
+                retry = True
+        if not success and not retry:
+            logging.info("Aborting T%s because no relevent site has a committed version before T%s began and has not failed in between." % (transaction_index, transaction_index))
+            print("Aborting T%s because no relevent site has a committed version before T%s began and has not failed in between." % (transaction_index, transaction_index))
             self._abort_transaction(transaction_index)
         return success
 

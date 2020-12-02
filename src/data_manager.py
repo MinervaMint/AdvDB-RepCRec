@@ -65,13 +65,14 @@ class DataManager(object):
         # if obtained lock, read
         can_lock, blocking_transactions = self.acquire_read_lock(var_index, transaction_index)
         if can_lock:
+            logging.info("T%s acquired read lock on x%s." % (transaction_index, var_index))
             value = self.get_committed_var(var_index)
             logging.info("Read x%s = %s from site %s by T%s." % (var_index, value, self.associated_site, transaction_index))
             IO.print_var(var_index, value)
             return True, []
 
         # if cannot obtain lock
-        logging.info("Cannot acquire read lock on x%s for T%s." % (var_index, transaction_index))
+        logging.info("Cannot acquire read lock on x%s for T%s at site %d." % (var_index, transaction_index, self.associated_site))
         return can_lock, blocking_transactions
 
 
@@ -82,7 +83,10 @@ class DataManager(object):
         assert(self.variable_status.get(var_index) != self.VStatus.Unavailable)
         # try to acquire write lock
         # if obtained lock, write (write value in transaction's uncommitted vars)
-        return self.acquire_write_lock(var_index, transaction_index)
+        success, blocking_transactions = self.acquire_write_lock(var_index, transaction_index)
+        if success:
+            logging.info("T%s acquired write lock on x%s at site %d." % (transaction_index, var_index, self.associated_site))
+        return success, blocking_transactions
 
 
 
@@ -112,6 +116,7 @@ class DataManager(object):
             return True, []
         elif current_lock.lock_type == Lock.LockType.WriteLock:
             if current_lock.transactions[0] == transaction_index:
+                logging.info("T%s already has write lock on x%s." % (transaction_index, var_index))
                 return True, []
             blocking_transactions = current_lock.transactions
             return False, blocking_transactions
@@ -130,8 +135,10 @@ class DataManager(object):
             return True, []
         elif current_lock.lock_type == Lock.LockType.ReadLock and len(current_lock.transactions) == 1 and current_lock.transactions[0] == transaction_index:
             self.locktable[var_index].lock_type = Lock.LockType.WriteLock
+            logging.info("Promoting T%s's read lock on x%s to write lock." % (transaction_index, var_index))
             return True, []
         elif current_lock.lock_type == Lock.LockType.WriteLock and current_lock.transactions[0] == transaction_index:
+            logging.info("T%s already has write lock on x%s." % (transaction_index, var_index))
             return True, []
         else:
             blocking_transactions = current_lock.transactions
@@ -163,6 +170,8 @@ class DataManager(object):
                 continue
             if transaction_index in lock.transactions:
                 self.locktable[var].transactions.remove(transaction_index)
+                lock_type = "read" if lock.lock_type == Lock.LockType.ReadLock else "write"
+                logging.info("Released T%s's %s lock on x%s on site %s." % (transaction_index, lock_type, var, self.associated_site))
                 if len(self.locktable[var].transactions) == 0:
                     self.locktable.pop(var)
               
