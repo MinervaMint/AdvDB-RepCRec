@@ -134,8 +134,8 @@ class TransactionManager(object):
             if self.transactions[transaction_index].start_time > self.transactions[youngest_index].start_time:
                 youngest_index = transaction_index
         
-        logging.info("Aborting T%s to break the deadlock." % transaction_index)
-        print("Aborting T%s to break the deadlock." % transaction_index)
+        logging.info("Aborting T%s to break the deadlock." % youngest_index)
+        print("Aborting T%s to break the deadlock." % youngest_index)
         self._abort_transaction(youngest_index)
 
     
@@ -222,15 +222,12 @@ class TransactionManager(object):
     def _commit_transaction(self, transaction_index):
         """ commit a transaction """
         T = self.transactions.get(transaction_index)
-        # write uncommitted var values to sites
-        for var_index in T.uncommitted_vars.keys():
-            for site in self._get_relevent_sites(var_index):
-                if site.status != Site.SStatus.Down:
-                    site.DM.commit_var(var_index, T.uncommitted_vars[var_index], self.global_time)
         # release all locks
         for site in self.sites:
             if site.status != Site.SStatus.Down:
                 site.DM.release_all_locks(transaction_index)
+                # write uncommitted var values to sites
+                site.DM.commit_vars(transaction_index, self.global_time)
         # check whether lock request in waiting queue can advance
         for var_index in self.lock_waiting_queue.keys():
             waiting_queue = self.lock_waiting_queue.get(var_index)
@@ -293,6 +290,7 @@ class TransactionManager(object):
         for site in self.sites:
             if site.status != Site.SStatus.Down:
                 site.DM.release_all_locks(transaction_index)
+                site.DM.abort_vars(transaction_index)
 
         # check whether lock request in waiting queue can advance
         for var_index in self.lock_waiting_queue.keys():
@@ -426,7 +424,7 @@ class TransactionManager(object):
                     num_sites_unavailable += 1
                 elif success:
                     # record first access time
-                    if site.first_access_time.get(transaction_index) == None:
+                    if site.first_access_time.get(transaction_index) is None:
                         site.first_access_time[transaction_index] = self.global_time
                     break
             if num_sites_unavailable == len(relevent_sites): # no sites available for read
@@ -520,7 +518,7 @@ class TransactionManager(object):
                 continue
             success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
             # record first access time
-            if site.first_access_time.get(transaction_index) == None:
+            if site.first_access_time.get(transaction_index) is None:
                 site.first_access_time[transaction_index] = self.global_time
             
         

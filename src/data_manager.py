@@ -13,6 +13,7 @@ class DataManager(object):
     def __init__(self, associated_site):
         self.associated_site = associated_site
         self.variables: {int: [()]} = {}
+        self.uncommitted_vars: {int: [()]} = {}
         self.variable_status = {}
         self.locktable = {}
 
@@ -29,6 +30,8 @@ class DataManager(object):
         """ when the corresponding site fails """
         # lock information may be lost
         self.locktable = {}
+        # wipe out uncommitted vars
+        self.uncommitted_vars = {}
         # change variable status
         for var_index in self.variable_status.keys():
             self.variable_status[var_index] = self.VStatus.Unavailable
@@ -86,6 +89,7 @@ class DataManager(object):
         success, blocking_transactions = self.acquire_write_lock(var_index, transaction_index)
         if success:
             logging.info("T%s acquired write lock on x%s at site %d." % (transaction_index, var_index, self.associated_site))
+            self.write_uncommitted(var_index, value, transaction_index)
         return success, blocking_transactions
 
 
@@ -206,3 +210,34 @@ class DataManager(object):
                     logging.info("Read x%s = %s from site %s by T%s." % (var_index, value, self.associated_site, transaction_index))
                 break
         return success
+
+
+    def write_uncommitted(self, var_index, value, transaction_index):
+        """ write temporary uncommitted value """
+        if self.uncommitted_vars.get(transaction_index) is None:
+            self.uncommitted_vars[transaction_index] = []
+        self.uncommitted_vars[transaction_index].append((var_index, value))
+
+    def commit_vars(self, transaction_index, tick):
+        """ commit the uncommitted vars of a transaction """
+        if self.uncommitted_vars.get(transaction_index) is None:
+            return
+        for uncommitted_record in self.uncommitted_vars[transaction_index]:
+            var_index = uncommitted_record[0]
+            value = uncommitted_record[1]
+            self.variables[var_index].append((tick, value))
+        self.uncommitted_vars.pop(transaction_index)
+
+    def abort_vars(self, transaction_index):
+        """ discard the uncommitted vars of a transaction """
+        if self.uncommitted_vars.get(transaction_index) is not None:
+            self.uncommitted_vars.pop(transaction_index)
+
+    def get_uncommitted_var(self, var_index, transaction_index):
+        """ return the temporary value of a var """
+        if self.uncommitted_vars.get(transaction_index) is None:
+            return None
+        for uncommitted_record in self.uncommitted_vars[transaction_index]:
+            if uncommitted_record[0] == var_index:
+                return uncommitted_record[1]
+        return None
