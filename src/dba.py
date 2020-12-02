@@ -1,10 +1,14 @@
 from inout import IO
 from transaction_manager import TransactionManager
+import sys
 
-print("Please enter the filename for input file (must be under the data folder).")
 
-filename = "../data/" + input("Filename: ")
 
+if len(sys.argv) < 2:
+    print("Usage: python3 dba.py <inputfile>")
+    sys.exit()
+
+filename = sys.argv[1]
 
 io = IO(filename)
 tm = TransactionManager()
