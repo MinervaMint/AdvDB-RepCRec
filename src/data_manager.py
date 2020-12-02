@@ -101,8 +101,7 @@ class DataManager(object):
         self.variables[var_index].append((tick, value))
         logging.info("Commit x%s = %s to site %s at tick: %s." % (var_index, value, self.associated_site, tick))
         # if the var is recovering, update status
-        if self.variable_status.get(var_index) == self.VStatus.Recovering:
-            self.variable_status[var_index] = self.VStatus.Ready
+        self.variable_status[var_index] = self.VStatus.Ready
         
 
     def acquire_read_lock(self, var_index, transaction_index):
@@ -225,7 +224,7 @@ class DataManager(object):
         for uncommitted_record in self.uncommitted_vars[transaction_index]:
             var_index = uncommitted_record[0]
             value = uncommitted_record[1]
-            self.variables[var_index].append((tick, value))
+            self.commit_var(var_index, value, tick)
         self.uncommitted_vars.pop(transaction_index)
 
     def abort_vars(self, transaction_index):
