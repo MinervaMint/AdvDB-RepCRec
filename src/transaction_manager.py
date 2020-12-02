@@ -51,19 +51,18 @@ class TransactionManager(object):
 
         # retry
         for retry_op in list(self.op_retry_queue.keys()):
-            # TODO: use wait for graph to determine whether we need to retry (if still blocked no need to retry)
-            retry_success, transaction_index = self.transalate_op(retry_op)
+            retry_success, transaction_index = self.translate_op(retry_op)
             if retry_success:
                 self.op_retry_queue.pop(retry_op)
 
 
         # call translate to execute op if provided
         if op:
-            success, op_transaction_index = self.transalate_op(op)
+            success, op_transaction_index = self.translate_op(op)
 
         # retry
         for retry_op in list(self.op_retry_queue.keys()):
-            retry_success, transaction_index = self.transalate_op(retry_op)
+            retry_success, transaction_index = self.translate_op(retry_op)
             if retry_success:
                 self.op_retry_queue.pop(retry_op)
 
@@ -140,7 +139,7 @@ class TransactionManager(object):
         self._abort_transaction(youngest_index)
 
     
-    def transalate_op(self, op):
+    def translate_op(self, op):
         """ translate an operation """
         if "begin" in op and "beginRO" not in op:
             transaction_index = int(op[op.find("(")+2 : op.find(")")])
@@ -527,7 +526,7 @@ class TransactionManager(object):
         
         # if can write, save value in uncommitted vars
         self.transactions[transaction_index].write_uncommitted(var_index, value)
-        
+
         return True
 
 
