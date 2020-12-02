@@ -14,6 +14,3 @@ beginRO(T2)
 fail(1)
 R(T2, x2)
 end(T2)
-
-output: T2 should be committed
-

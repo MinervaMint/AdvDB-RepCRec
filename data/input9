@@ -14,5 +14,3 @@ fail(1)
 beginRO(T2)
 R(T2, x2)
 end(T2)
-
-output: T2 should be aborted

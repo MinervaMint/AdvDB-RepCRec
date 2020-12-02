@@ -13,6 +13,3 @@ R(T5, x1)
 end(T3)
 end(T4)
 end(T5)
-
-output : T2 can acquire lock once it tries to acquire
-output : T5 can't acquire lock until T4 ends
