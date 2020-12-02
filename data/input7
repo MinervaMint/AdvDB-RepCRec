@@ -40,6 +40,3 @@ recover(10)
 beginRO(T6)
 R(T6, x2)
 end(T6)
-
-//output : T1, T3, T4 and T5 should be committed, T2 and T6 should be aborted 
-//output : T5 can't read x2 from site 1
