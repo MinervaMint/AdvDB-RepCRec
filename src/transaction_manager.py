@@ -135,6 +135,8 @@ class TransactionManager(object):
             if self.transactions[transaction_index].start_time > self.transactions[youngest_index].start_time:
                 youngest_index = transaction_index
         
+        logging.info("Aborting T%s to break the deadlock." % transaction_index)
+        print("Aborting T%s to break the deadlock." % transaction_index)
         self._abort_transaction(youngest_index)
 
     
@@ -195,9 +197,10 @@ class TransactionManager(object):
             return True
 
         if T.read_only:
-            T.status = Transaction.TStatus.Committed
-            logging.info("T%s commits." % transaction_index)
-            return True
+            if T.status == Transaction.TStatus.Aborted:
+                logging.info("T%s already aborted." % transaction_index)
+                return True
+            return self._commit_transaction(transaction_index)
         else:
             # determine whether can commit
             # ensure that all servers you accessed have been up 
@@ -210,6 +213,8 @@ class TransactionManager(object):
                     last_fail_index = len(self.sites_fail_time.get(site.index)) - 1
                     last_fail_time = self.sites_fail_time.get(site.index)[last_fail_index]
                 if site.first_access_time[transaction_index] < last_fail_time:
+                    logging.info("Aborting T%s because some servers it accessed failed after its first access." % transaction_index)
+                    print("Aborting T%s because some servers it accessed failed after its first access." % transaction_index)
                     return self._abort_transaction(transaction_index)
             return self._commit_transaction(transaction_index)
 
@@ -278,6 +283,7 @@ class TransactionManager(object):
         # set status
         T.status = Transaction.TStatus.Committed
         logging.info("T%s commits at tick: %s." % (transaction_index, self.global_time))
+        print("T%s commits." % transaction_index)
         return True
 
 
@@ -337,13 +343,14 @@ class TransactionManager(object):
                 self.wait_for_graph.get(t).remove(transaction_index)
                 if len(self.wait_for_graph.get(t)) == 0:
                     self.wait_for_graph.pop(t)
-        # TODO: when aborting a transaction, all associated op in retry queue should be removed
+        # when aborting a transaction, all associated op in retry queue should be removed
         for retry_op in list(self.op_retry_queue.keys()):
             if self.op_retry_queue[retry_op] == transaction_index:
                 self.op_retry_queue.pop(retry_op)
         # set status
         T.status = Transaction.TStatus.Aborted
         logging.info("T%s aborts at tick: %s." % (transaction_index, self.global_time))
+        print("T%s aborts." % transaction_index)
         return True
 
 
@@ -513,14 +520,14 @@ class TransactionManager(object):
             if site.status == Site.SStatus.Down:
                 continue
             success, blocking_transactions = site.DM.write(var_index, value, transaction_index)
+            # record first access time
+            if site.first_access_time.get(transaction_index) == None:
+                site.first_access_time[transaction_index] = self.global_time
             
         
         # if can write, save value in uncommitted vars
         self.transactions[transaction_index].write_uncommitted(var_index, value)
-        # record first access time
-        for site in relevent_sites:
-            if site.first_access_time.get(transaction_index) == None:
-                site.first_access_time[transaction_index] = self.global_time
+        
         return True
 
 
@@ -550,15 +557,23 @@ class TransactionManager(object):
     def _read_from_snapshot(self, transaction_index, var_index, start_time):
         """ read for RO transactions """
         success = False
+        retry = False
 
         if var_index % 2 != 0:
             # odd indexed (no duplicates)
             site = self.sites[var_index % 10]
-            success = site.DM.read_from_snapshot(var_index, start_time, None, None, transaction_index)
+            if site.status != Site.SStatus.Down:
+                success = site.DM.read_from_snapshot(var_index, start_time, None, None, transaction_index)
+            else:
+                retry = True
         else:
             # even indexed (duplicates)
             relevent_sites = self._get_relevent_sites(var_index)
+            num_sites_down = 0
             for site in relevent_sites:
+                if site.status == Site.SStatus.Down:
+                    num_sites_down += 1
+                    continue
                 last_fail_time = None
                 first_fail_time = None
                 if self.sites_fail_time.get(site.index) is not None:
@@ -568,8 +583,11 @@ class TransactionManager(object):
                 success = site.DM.read_from_snapshot(var_index, start_time, first_fail_time, last_fail_time, transaction_index)
                 if success:
                     break
-        if not success:
-            logging.info("T%s aborts." % transaction_index)
+            if num_sites_down == len(relevent_sites):
+                retry = True
+        if not success and not retry:
+            logging.info("Aborting T%s because no relevent site has a committed version before T%s began and has not failed in between." % (transaction_index, transaction_index))
+            print("Aborting T%s because no relevent site has a committed version before T%s began and has not failed in between." % (transaction_index, transaction_index))
             self._abort_transaction(transaction_index)
         return success
 
